@@ -48,11 +48,11 @@ HEADERS = {
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 USDT → TRX 自動兌換機器人\n\n"
+        "🤖 USDT → TRX 自动兑换机器人\n\n"
         "📌 使用方式：\n"
-        "/usdt － 查看兌換報價\n\n"
-        f"🔻 最低兌換金額：{MIN_USDT} USDT\n"
-        "🌐 網路：TRC20\n"
+        "/usdt － 查看兑换报价\n\n"
+        f"🔻 最低兑换金额：{MIN_USDT} USDT\n"
+        "🌐 网络：TRC20\n"
     )
 
 async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -60,16 +60,16 @@ async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     trx_amount = round(DISPLAY_USDT * final_rate, 2)
 
     text = (
-        "💱 <b>USDT → TRX 兌換報價</b>\n\n"
+        "💱 <b>USDT → TRX 实时汇率</b>\n\n"
         f"USDT：{DISPLAY_USDT}\n"
-        f"可兌換 TRX：約 {trx_amount}\n\n"
-        f"🔻 最低兌換金額：{MIN_USDT} USDT\n\n"
-        "📥 <b>TRC20 USDT 收款地址（可直接複製）</b>\n"
+        f"可兑换 TRX：约 {trx_amount}\n\n"
+        f"🔻 最低兑换金额：{MIN_USDT} USDT\n\n"
+        "📥 <b>TRC20 USDT 换 TRX地址（点击地址自动复制）</b>\n"
         "<code>"
         f"{TRC20_ADDRESS}"
         "</code>\n\n"
-        "⚠️ 請務必使用 TRC20 網路轉帳\n"
-        "轉帳完成後請耐心等待處理"
+        "⚠️ 请务必使用 TRC20 网络转账\n"
+        "转账完成后请耐心等待处理，预计3分钟内完成闪兑"
     )
 
     await update.message.reply_text(text, parse_mode="HTML")
@@ -161,5 +161,6 @@ def main():
 if __name__ == "__main__":
     import asyncio
     main()
+
 
 
