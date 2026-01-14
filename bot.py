@@ -10,9 +10,10 @@ from telegram.ext import (
 # ========= 基本設定 =========
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
-USDT_AMOUNT = 5.0          # 最小兌換金額
-FEE_RATE = 0.03            # 3% 利差
-FALLBACK_TRX_PRICE = 0.306 # 備用匯率（1 TRX = ? USDT）
+USDT_AMOUNT = 5.0          # 顯示用金額
+MIN_USDT = 5.0             # 最低限額
+FEE_RATE = 0.05            # 5% 利差
+FALLBACK_TRX_PRICE = 0.306 # 備用匯率（1 TRX ≈ USDT）
 
 TRC20_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"
 
@@ -25,7 +26,7 @@ def get_trx_price():
             params={"ids": "tron", "vs_currencies": "usd"},
             timeout=10,
         )
-        return r.json()["tron"]["usd"]
+        return float(r.json()["tron"]["usd"])
     except Exception:
         return FALLBACK_TRX_PRICE
 
@@ -36,7 +37,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🤖 USDT → TRX 自動兌換機器人\n\n"
         "📌 使用方式：\n"
         "/usdt\n\n"
-        f"🔻 最小兌換金額：{USDT_AMOUNT} USDT\n"
+        f"🔻 最低兌換限額：{MIN_USDT} USDT\n"
         "💰 即時匯率\n"
         "🌐 網路：TRC20"
     )
@@ -52,6 +53,7 @@ async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "💱 USDT → TRX 兌換報價\n\n"
         f"USDT：{USDT_AMOUNT}\n"
         f"可兌換 TRX：約 {trx_amount:.2f}\n\n"
+        f"🔻 最低兌換限額：{MIN_USDT} USDT\n\n"
         "📥 TRC20 USDT 收款地址（可直接複製）\n"
         f"`{TRC20_ADDRESS}`\n\n"
         "⚠️ 請務必使用 TRC20 網路轉帳\n"
