@@ -7,7 +7,7 @@ from telegram.ext import (
 import requests
 
 # ===== 基本設定 =====
-BOT_TOKEN = os.environ.get"8296513887:AAGQ3S_aNGKq-L_DqV1oREb1vAQZ0ztj_QI"
+BOT_TOKEN = os.environ.get("8296513887:AAGQ3S_aNGKq-L_DqV1oREb1vAQZ0ztj_QI")
 
 # 固定顯示的兌換金額（USDT）
 DEFAULT_USDT_AMOUNT = 10.0
@@ -65,3 +65,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
