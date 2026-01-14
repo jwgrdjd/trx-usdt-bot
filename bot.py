@@ -19,7 +19,7 @@ TRC20_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"
 DEFAULT_USDT = 10.0
 MIN_USDT = 5.0
 FEE_RATE = 0.03            # 3%
-FALLBACK_TRX_PRICE = 0.36  # 備用匯率（USDT）
+FALLBACK_TRX_PRICE = 0.33  # 備用匯率（USDT）
 
 logging.basicConfig(
     level=logging.INFO,
@@ -91,5 +91,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
