@@ -112,15 +112,18 @@ def poll_trc20(context: ContextTypes.DEFAULT_TYPE):
 
     print("DEBUG TX:", tx)
 
+    # 只處理 USDT
     if tx.get("token_info", {}).get("symbol") != "USDT":
         SEEN_TX.add(txid)
         continue
 
+    # 確認是轉入熱錢包
     to_addr = tx.get("to")
     if to_addr != HOT_WALLET_ADDRESS:
         SEEN_TX.add(txid)
         continue
 
+    # 忽略啟動前交易
     if tx["block_timestamp"] / 1000 < START_TIME:
         SEEN_TX.add(txid)
         continue
@@ -130,33 +133,33 @@ def poll_trc20(context: ContextTypes.DEFAULT_TYPE):
         SEEN_TX.add(txid)
         continue
 
+    from_addr = tx["from"]
+    SEEN_TX.add(txid)
 
-            from_addr = tx["from"]
-            SEEN_TX.add(txid)
+    trx_amount = round(usdt_amount * FIXED_RATE_TRX * (1 - FEE_RATE), 2)
 
-            trx_amount = round(usdt_amount * FIXED_RATE_TRX * (1 - FEE_RATE), 2)
+    try:
+        tron.trx.transfer(
+            HOT_WALLET_ADDRESS,
+            from_addr,
+            int(trx_amount * 1_000_000)
+        ).fee_limit(FEE_LIMIT_SUN).build().sign(private_key).broadcast()
 
-            try:
-                tron.trx.transfer(
-                    HOT_WALLET_FROM_PK,
-                    from_addr,
-                    int(trx_amount * 1_000_000)
-                ).fee_limit(FEE_LIMIT_SUN).build().sign(private_key).broadcast()
+        status = "✅ 已出金"
+    except Exception as e:
+        status = f"❌ 出金失敗：{e}"
 
-                status = "✅ 已出金"
-            except Exception as e:
-                status = f"❌ 出金失敗：{e}"
+    await app.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=(
+            f"🔔 USDT 入帳\n"
+            f"金額：{usdt_amount} USDT\n"
+            f"來源：{from_addr}\n"
+            f"應付：{trx_amount} TRX\n"
+            f"{status}"
+        )
+    )
 
-            context.bot.send_message(
-                chat_id=ADMIN_ID,
-                text=(
-                    "🔔 USDT 入帳\n\n"
-                    f"金額：{usdt_amount} USDT\n"
-                    f"來源：{from_addr}\n"
-                    f"應付：{trx_amount} TRX\n"
-                    f"{status}"
-                )
-            )
 
     except Exception as e:
         print("監聽錯誤：", e)
@@ -183,4 +186,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
