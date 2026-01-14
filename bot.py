@@ -1,6 +1,5 @@
 import os
 import time
-import asyncio
 import requests
 from datetime import datetime
 
@@ -8,6 +7,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 from tronpy import Tron
+from tronpy.providers import HTTPProvider
 from tronpy.keys import PrivateKey
 
 # =====================
@@ -18,15 +18,15 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 TRONGRID_API_KEY = os.environ.get("TRONGRID_API_KEY")
 TRX_PRIVATE_KEY = os.environ.get("TRX_PRIVATE_KEY")
 
-ADMIN_ID = 7757022123
+ADMIN_ID = 7757022123  # 你的 Telegram ID
 HOT_WALLET_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"
 
 FIXED_RATE_TRX = 3.2
 FEE_RATE = 0.05
 MIN_USDT = 5.0
 
-POLL_INTERVAL = 30
-FEE_LIMIT_SUN = 10_000_000  # 10 TRX
+POLL_INTERVAL = 30          # 秒
+FEE_LIMIT_SUN = 10_000_000  # 10 TRX 手續費上限
 
 # =====================
 # 🔒 檢查
@@ -36,24 +36,29 @@ if not BOT_TOKEN or not TRONGRID_API_KEY or not TRX_PRIVATE_KEY:
     raise RuntimeError("❌ 環境變數未設定")
 
 if len(TRX_PRIVATE_KEY) != 64:
-    raise RuntimeError("❌ 私鑰必須是 64 位 HEX")
+    raise RuntimeError("❌ TRX_PRIVATE_KEY 必須是 64 位 HEX")
 
 # =====================
-# 🔗 Tron（只負責出金）
+# 🔗 Tron 初始化（正確版）
 # =====================
 
-tron = Tron()
+provider = HTTPProvider(
+    endpoint_uri="https://api.trongrid.io",
+    api_key=TRONGRID_API_KEY
+)
+tron = Tron(provider=provider)
+
 private_key = PrivateKey(bytes.fromhex(TRX_PRIVATE_KEY))
-hot_wallet = private_key.public_key.to_base58check_address()
+HOT_WALLET_FROM_PK = private_key.public_key.to_base58check_address()
 
-print("✅ 熱錢包地址：", hot_wallet)
+print("✅ 熱錢包地址：", HOT_WALLET_FROM_PK)
 
 # =====================
 # 🧠 狀態
 # =====================
 
-seen_tx = set()
-START_TIME = time.time()
+SEEN_TX = set()
+START_TIME = time.time()  # 只抓啟動後的交易
 
 # =====================
 # 🤖 指令
@@ -87,45 +92,47 @@ async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-
-
 # =====================
-# 🔁 鏈上監聽 + 出金
+# 🔁 鏈上監聽 + 自動出金
 # =====================
 
-async def poll_trc20(app):
+def poll_trc20(context: ContextTypes.DEFAULT_TYPE):
     url = f"https://api.trongrid.io/v1/accounts/{HOT_WALLET_ADDRESS}/transactions/trc20"
     headers = {"TRON-PRO-API-KEY": TRONGRID_API_KEY}
 
     try:
         r = requests.get(url, headers=headers, params={"limit": 20}, timeout=10)
         r.raise_for_status()
+        txs = r.json().get("data", [])
 
-        for tx in r.json().get("data", []):
+        for tx in txs:
             txid = tx["transaction_id"]
-            if txid in seen_tx:
+            if txid in SEEN_TX:
                 continue
 
-            if tx["to"] != HOT_WALLET_ADDRESS:
+            # 只處理「轉入熱錢包」
+            if tx.get("to") != HOT_WALLET_ADDRESS:
+                SEEN_TX.add(txid)
                 continue
 
+            # 只抓啟動後的交易
             if tx["block_timestamp"] / 1000 < START_TIME:
-                seen_tx.add(txid)
+                SEEN_TX.add(txid)
                 continue
 
             usdt_amount = float(tx["value"]) / 1_000_000
             if usdt_amount < MIN_USDT:
-                seen_tx.add(txid)
+                SEEN_TX.add(txid)
                 continue
 
             from_addr = tx["from"]
-            seen_tx.add(txid)
+            SEEN_TX.add(txid)
 
             trx_amount = round(usdt_amount * FIXED_RATE_TRX * (1 - FEE_RATE), 2)
 
             try:
                 tron.trx.transfer(
-                    hot_wallet,
+                    HOT_WALLET_FROM_PK,
                     from_addr,
                     int(trx_amount * 1_000_000)
                 ).fee_limit(FEE_LIMIT_SUN).build().sign(private_key).broadcast()
@@ -134,11 +141,11 @@ async def poll_trc20(app):
             except Exception as e:
                 status = f"❌ 出金失敗：{e}"
 
-            await app.bot.send_message(
+            context.bot.send_message(
                 chat_id=ADMIN_ID,
                 text=(
-                    f"🔔 USDT 入帳\n"
-                    f"{usdt_amount} USDT\n"
+                    "🔔 USDT 入帳\n\n"
+                    f"金額：{usdt_amount} USDT\n"
                     f"來源：{from_addr}\n"
                     f"應付：{trx_amount} TRX\n"
                     f"{status}"
@@ -149,7 +156,7 @@ async def poll_trc20(app):
         print("監聽錯誤：", e)
 
 # =====================
-# 🚀 主程式（❗重點在這）
+# 🚀 主程式
 # =====================
 
 def main():
@@ -158,18 +165,15 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("usdt", usdt))
 
-    # ✅ 用 PTB 的 job_queue（它自己管 loop）
+    # ✅ 用 job_queue（你已安裝）
     app.job_queue.run_repeating(
-        lambda ctx: poll_trc20(app),
+        poll_trc20,
         interval=POLL_INTERVAL,
         first=5
     )
 
-    print("🤖 Bot 已啟動（最終穩定版）")
+    print("🤖 Bot 已啟動（真・自動出金）")
     app.run_polling()
 
 if __name__ == "__main__":
     main()
-
-
-
