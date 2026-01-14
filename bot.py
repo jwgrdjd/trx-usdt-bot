@@ -98,16 +98,15 @@ async def poll_trc20(context: ContextTypes.DEFAULT_TYPE):
                 continue
 
             value = float(tx["value"]) / 1_000_000
-from_addr = tx["from"]
-to_addr = tx["to"]
+            from_addr = tx["from"]
+            to_addr = tx["to"]
 
-# ❗ 只處理「轉入到自己地址」的交易
-if to_addr.lower() != TRC20_ADDRESS.lower():
-    continue
+            # ✅ 只處理「轉入到自己地址」
+            if to_addr.lower() != TRC20_ADDRESS.lower():
+                continue
 
-if value < MIN_USDT:
-    continue
-
+            if value < MIN_USDT:
+                continue
 
             last_seen_tx.add(txid)
 
@@ -130,6 +129,7 @@ if value < MIN_USDT:
 
     except Exception as e:
         print("監聽錯誤：", e)
+
 
 # =====================
 # 🚀 啟動
@@ -162,3 +162,4 @@ def main():
 if __name__ == "__main__":
     import asyncio
     main()
+
