@@ -25,8 +25,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📌 <b>使用方式</b>\n"
         "/usdt － 查看兌換報價\n\n"
         f"🔻 最低兌換金額：<b>{MIN_USDT} USDT</b>\n"
-        "🌐 網路：<b>TRC20</b>\n"
-        "💰 匯率：<b>固定</b>",
+        "🌐 網路：<b>TRC20</b>\n",
         parse_mode="HTML"
     )
 
@@ -74,3 +73,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
