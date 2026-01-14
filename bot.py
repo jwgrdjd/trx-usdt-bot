@@ -14,12 +14,14 @@ from telegram.ext import (
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
-TRC20_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"  # 你的 Trust Wallet
+ADMIN_CHAT_ID = 7757022123  # ← 換成你的 Telegram 數字 ID
+
+TRC20_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"  # Trust Wallet
 USDT_CONTRACT = "TXLAQ63Xg1NAzckPwKHvzw7CSEmLMEqcdj"  # TRC20 USDT
 
-MIN_USDT = 10
-FEE_RATE = 0.07            # 7% 利差
-FALLBACK_TRX_PRICE = 0.30 # 備用匯率（USDT）
+MIN_USDT = 5.0
+FEE_RATE = 0.05            # 5% 利差
+FALLBACK_TRX_PRICE = 0.306
 CHECK_INTERVAL = 30        # 秒
 
 # ======================
@@ -70,7 +72,7 @@ def fetch_usdt_transfers():
     return r.json().get("data", [])
 
 # ======================
-# 背景監聽
+# 背景監聽（只通知管理員）
 # ======================
 
 async def watch_usdt(context: ContextTypes.DEFAULT_TYPE):
@@ -98,7 +100,7 @@ async def watch_usdt(context: ContextTypes.DEFAULT_TYPE):
         trx_amount = round(amount / price_with_fee, 2)
 
         text = (
-            "✅ 已收到 USDT 入帳\n\n"
+            "🟢【USDT 入帳通知】\n\n"
             f"金額：{amount} USDT\n"
             f"應付 TRX：約 {trx_amount}\n\n"
             f"來自地址：{from_addr}\n"
@@ -107,7 +109,7 @@ async def watch_usdt(context: ContextTypes.DEFAULT_TYPE):
         )
 
         await context.bot.send_message(
-            chat_id=context.job.chat_id,
+            chat_id=ADMIN_CHAT_ID,
             text=text
         )
 
@@ -124,7 +126,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ======================
-# /usdt
+# /usdt（用戶只看到地址）
 # ======================
 
 async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -134,7 +136,7 @@ async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📥 TRC20 USDT 收款地址（可直接複製）\n"
         f"`{TRC20_ADDRESS}`\n\n"
         "⚠️ 請務必使用 TRC20 網路轉帳\n"
-        "系統將自動計算應付 TRX"
+        "轉帳完成後請耐心等待處理"
     )
 
     await update.message.reply_text(
@@ -155,11 +157,10 @@ def main():
     app.job_queue.run_repeating(
         watch_usdt,
         interval=CHECK_INTERVAL,
-        first=10,
-        chat_id=None
+        first=10
     )
 
-    print("🤖 Bot running (C-Safe + TRX calc)")
+    print("🤖 Bot running (C-Safe / admin only)")
     app.run_polling()
 
 if __name__ == "__main__":
