@@ -23,8 +23,8 @@ TRC20_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"
 
 FIXED_RATE_TRX = 3.2     # 固定匯率
 FEE_RATE = 0.05          # 手續費 5%
-MIN_USDT = 5.0
-DISPLAY_USDT = 10.0
+MIN_USDT = 5
+DISPLAY_USDT = 10
 
 POLL_INTERVAL = 30       # 30 秒輪詢一次
 
@@ -53,7 +53,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/usdt － 查看兌換報價\n\n"
         f"🔻 最低兌換金額：{MIN_USDT} USDT\n"
         "🌐 網路：TRC20\n"
-        "💱 匯率：固定"
     )
 
 async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -65,7 +64,7 @@ async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"USDT：{DISPLAY_USDT}\n"
         f"可兌換 TRX：約 {trx_amount}\n\n"
         f"🔻 最低兌換金額：{MIN_USDT} USDT\n\n"
-        "📥 <b>TRC20 USDT 收款地址</b>\n"
+        "📥 <b>TRC20 USDT 收款地址（可直接複製）</b>\n"
         "<code>"
         f"{TRC20_ADDRESS}"
         "</code>\n\n"
@@ -162,4 +161,5 @@ def main():
 if __name__ == "__main__":
     import asyncio
     main()
+
 
