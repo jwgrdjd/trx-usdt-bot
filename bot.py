@@ -1,145 +1,127 @@
 import os
+import time
+import requests
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
+)
 
 # =====================
 # 🔧 基本設定
 # =====================
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
+TRONGRID_API_KEY = os.environ.get("TRONGRID_API_KEY")
 
-# 🔐 管理員 Telegram ID（只允許這些人）
-ADMIN_IDS = [7757022123]  # ← 你的 ID
+# 管理員（你）
+ADMIN_IDS = [7757022123]
 
+# 收款地址
 TRC20_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"
 
-# 🔢 可調參數（可被後台指令修改）
+# USDT TRC20 合約（TRON 官方）
+USDT_CONTRACT = "TXLAQ63Xg1NAzckPwKHvzw7CSEmLMEqcdj"
+
+# 匯率設定
 FIXED_RATE_TRX = 3.2
 FEE_RATE = 0.05
 MIN_USDT = 5.0
-DISPLAY_USDT = 10.0
 
-# ⏸ 系統狀態
-SYSTEM_PAUSED = False
+# 監聽設定
+CHECK_INTERVAL = 30  # 秒
+
+# 已處理交易（記憶體版，重啟會清空）
+PROCESSED_TX = set()
 
 
 # =====================
-# 🔐 權限檢查
+# 🔐 權限
 # =====================
 
 def is_admin(update: Update) -> bool:
     return update.effective_user.id in ADMIN_IDS
 
 
-async def deny(update: Update):
-    await update.message.reply_text("⚠️ 權限不足")
+# =====================
+# 🔍 查 TRC20 USDT 交易
+# =====================
+
+def fetch_trc20_transfers():
+    url = "https://api.trongrid.io/v1/accounts/{}/transactions/trc20".format(TRC20_ADDRESS)
+    headers = {
+        "TRON-PRO-API-KEY": TRONGRID_API_KEY
+    }
+    params = {
+        "only_confirmed": "true",
+        "limit": 20
+    }
+
+    r = requests.get(url, headers=headers, params=params, timeout=10)
+    r.raise_for_status()
+    return r.json().get("data", [])
 
 
 # =====================
-# 🤖 使用者指令
+# 🔁 監聽任務
+# =====================
+
+async def monitor_trc20(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        transfers = fetch_trc20_transfers()
+
+        for tx in transfers:
+            txid = tx["transaction_id"]
+
+            if txid in PROCESSED_TX:
+                continue
+
+            if tx["token_info"]["address"] != USDT_CONTRACT:
+                continue
+
+            amount = int(tx["value"]) / (10 ** int(tx["token_info"]["decimals"]))
+            from_addr = tx["from"]
+
+            if amount < MIN_USDT:
+                PROCESSED_TX.add(txid)
+                continue
+
+            # 計算應付 TRX
+            final_rate = FIXED_RATE_TRX * (1 - FEE_RATE)
+            trx_amount = round(amount * final_rate, 2)
+
+            message = (
+                "✅ <b>已收到 USDT</b>\n\n"
+                f"金額：{amount}\n"
+                f"來源地址：{from_addr}\n"
+                f"應發送：<b>{trx_amount} TRX</b>"
+            )
+
+            # 回給管理員
+            for admin_id in ADMIN_IDS:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=message,
+                    parse_mode="HTML"
+                )
+
+            PROCESSED_TX.add(txid)
+
+    except Exception as e:
+        print("監聽錯誤：", e)
+
+
+# =====================
+# 🤖 基本指令
 # =====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 USDT → TRX 自動兌換機器人\n\n"
-        "📌 使用方式：\n"
-        "/usdt － 查看兌換資訊\n\n"
-        f"🔻 最低兌換金額：{MIN_USDT} USDT\n"
-        "🌐 網路：TRC20"
+        "系統已啟用鏈上自動監聽\n"
+        "轉帳完成後無需回傳 TXID"
     )
-
-
-async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if SYSTEM_PAUSED:
-        await update.message.reply_text("⏸ 目前兌換功能暫停中，請稍後再試")
-        return
-
-    final_rate = FIXED_RATE_TRX * (1 - FEE_RATE)
-    trx_amount = round(DISPLAY_USDT * final_rate, 2)
-
-    text = (
-        "💱 <b>USDT → TRX 兌換報價</b>\n\n"
-        f"USDT：{DISPLAY_USDT}\n"
-        f"可兌換 TRX：約 <b>{trx_amount}</b>\n\n"
-        f"🔻 最低兌換金額：{MIN_USDT} USDT\n\n"
-        "📥 <b>TRC20 USDT 收款地址</b>\n"
-        "（點擊地址即可複製）\n\n"
-        f"<code>{TRC20_ADDRESS}</code>\n\n"
-        "⚠️ 請務必使用 TRC20 網路轉帳\n"
-        "轉帳完成後請耐心等待處理"
-    )
-
-    await update.message.reply_text(text, parse_mode="HTML")
-
-
-# =====================
-# 🛠️ 後台指令
-# =====================
-
-async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
-        await deny(update)
-        return
-
-    status_text = (
-        "📊 系統狀態\n\n"
-        f"狀態：{'⏸ 暫停中' if SYSTEM_PAUSED else '🟢 運行中'}\n"
-        f"固定匯率：{FIXED_RATE_TRX}\n"
-        f"手續費：{int(FEE_RATE * 100)}%\n"
-        f"最低兌換：{MIN_USDT} USDT"
-    )
-
-    await update.message.reply_text(status_text)
-
-
-async def pause(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global SYSTEM_PAUSED
-    if not is_admin(update):
-        await deny(update)
-        return
-
-    SYSTEM_PAUSED = True
-    await update.message.reply_text("⏸ 已暫停兌換")
-
-
-async def resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global SYSTEM_PAUSED
-    if not is_admin(update):
-        await deny(update)
-        return
-
-    SYSTEM_PAUSED = False
-    await update.message.reply_text("▶️ 已恢復兌換")
-
-
-async def setrate(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global FIXED_RATE_TRX
-    if not is_admin(update):
-        await deny(update)
-        return
-
-    try:
-        FIXED_RATE_TRX = float(context.args[0])
-        await update.message.reply_text(
-            f"✅ 固定匯率已更新\n1 USDT = {FIXED_RATE_TRX} TRX"
-        )
-    except Exception:
-        await update.message.reply_text("❌ 用法：/setrate 3.1")
-
-
-async def setfee(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global FEE_RATE
-    if not is_admin(update):
-        await deny(update)
-        return
-
-    try:
-        FEE_RATE = float(context.args[0])
-        await update.message.reply_text(
-            f"✅ 手續費已更新為 {int(FEE_RATE * 100)}%"
-        )
-    except Exception:
-        await update.message.reply_text("❌ 用法：/setfee 0.05")
 
 
 # =====================
@@ -147,23 +129,21 @@ async def setfee(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =====================
 
 def main():
-    if not BOT_TOKEN:
-        raise RuntimeError("❌ BOT_TOKEN 未設定")
+    if not BOT_TOKEN or not TRONGRID_API_KEY:
+        raise RuntimeError("❌ BOT_TOKEN 或 TRONGRID_API_KEY 未設定")
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # 使用者
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("usdt", usdt))
 
-    # 後台
-    app.add_handler(CommandHandler("status", status))
-    app.add_handler(CommandHandler("pause", pause))
-    app.add_handler(CommandHandler("resume", resume))
-    app.add_handler(CommandHandler("setrate", setrate))
-    app.add_handler(CommandHandler("setfee", setfee))
+    # 每 30 秒監聽一次
+    app.job_queue.run_repeating(
+        monitor_trc20,
+        interval=CHECK_INTERVAL,
+        first=10
+    )
 
-    print("✅ Bot 已啟動（後台管理員 v1）")
+    print("✅ Bot 已啟動（TRC20 USDT 自動監聽中）")
     app.run_polling()
 
 
