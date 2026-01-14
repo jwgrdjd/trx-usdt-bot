@@ -13,7 +13,7 @@ from telegram.ext import (
 BOT_TOKEN = os.environ.get("BOT_TOKEN")  # Railway Variables 設定
 RECEIVE_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"
 
-FIXED_RATE_TRX = 32.0     # 固定匯率：1 USDT = 3.2 TRX
+FIXED_RATE_TRX = 3.2     # 固定匯率：1 USDT = 3.2 TRX
 FEE_RATE = 0.05           # 手續費 5%（之後你只改這行）
 MIN_USDT = 5.0            # 最低兌換金額
 
@@ -69,4 +69,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
