@@ -3,17 +3,17 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # =====================
-# 🔧 可調整設定
+# 🔧 可自行調整設定
 # =====================
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
+BOT_TOKEN = os.environ.get("BOT_TOKEN")  # Railway Variables 設定
 
 RECEIVE_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"
 
-FIXED_RATE_TRX = 3.2     # 1 USDT = 3.2 TRX
-FEE_RATE = 0.05           # 5% 手續費（之後只改這行）
-MIN_USDT = 5.0
-DEFAULT_USDT = 10.0       # 顯示用：usdt10
+FIXED_RATE_TRX = 3.2    # 固定匯率：1 USDT = 3.2 TRX
+FEE_RATE = 0.05          # 手續費 5%（之後只改這行）
+MIN_USDT = 5.0           # 最低兌換金額
+DISPLAY_USDT = 10.0      # 顯示用（usdt10）
 
 # =====================
 # 🤖 指令
@@ -30,23 +30,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    usdt_amount = DEFAULT_USDT
-
     final_rate = FIXED_RATE_TRX * (1 - FEE_RATE)
-    trx_amount = round(usdt_amount * final_rate, 2)
+    trx_amount = round(DISPLAY_USDT * final_rate, 2)
 
     text = (
         "💱 *USDT → TRX 兌換報價*\n\n"
-        f"*USDT：* {usdt_amount}\n"
+        f"*USDT：* {DISPLAY_USDT}\n"
         f"*可兌換 TRX：* 約 {trx_amount}\n\n"
         f"🔻 *最低兌換金額：* {MIN_USDT} USDT\n\n"
-        text = (
-    "📥 *TRC20 USDT 收款地址（點擊即可複製）*\n\n"
-    f"```{RECEIVE_ADDRESS}```\n\n"
-    "⚠️ 請務必使用 *TRC20* 網路轉帳\n"
-    "轉帳完成後請耐心等待處理"
-)
-
+        "📥 *TRC20 USDT 收款地址（點擊即可複製）*\n\n"
+        f"```{RECEIVE_ADDRESS}```\n\n"
+        "⚠️ 請務必使用 *TRC20* 網路轉帳\n"
+        "轉帳完成後請耐心等待處理"
+    )
 
     await update.message.reply_text(
         text,
@@ -71,4 +67,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
