@@ -12,7 +12,7 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
 USDT_AMOUNT = 10          # 顯示用金額
 MIN_USDT = 5            # 最低限額
-FEE_RATE = 0.05            # 5% 利差
+FEE_RATE = 0.07            # 7% 利差
 FALLBACK_TRX_PRICE = 0.306 # 備用匯率（1 TRX ≈ USDT）
 
 TRC20_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"
@@ -82,4 +82,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
