@@ -16,7 +16,7 @@ from tronpy.providers import HTTPProvider
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 TRONGRID_API_KEY = os.environ.get("TRONGRID_API_KEY")
-TRX_PRIVATE_KEY = os.environ.get("TRX_PRIVATE_KEY")
+RAW_PRIVATE_KEY = os.environ.get("TRX_PRIVATE_KEY")
 AUTO_PAYOUT_ENABLED = os.environ.get("AUTO_PAYOUT_ENABLED") == "true"
 
 ADMIN_ID = 7757022123
@@ -33,6 +33,18 @@ POLL_INTERVAL = 30
 
 ALLOWED_START = dtime(0, 0)
 ALLOWED_END = dtime(10, 0)
+
+# =====================
+# 🔑 私鑰防呆清洗
+# =====================
+
+if not RAW_PRIVATE_KEY:
+    raise RuntimeError("❌ TRX_PRIVATE_KEY 未設定")
+
+TRX_PRIVATE_KEY = RAW_PRIVATE_KEY.strip().lower()
+
+if len(TRX_PRIVATE_KEY) != 64:
+    raise RuntimeError(f"❌ 私鑰長度錯誤（目前 {len(TRX_PRIVATE_KEY)}，必須是 64）")
 
 # =====================
 # 🔁 鏈上狀態
@@ -55,6 +67,8 @@ tron = Tron(
 
 pk = PrivateKey(bytes.fromhex(TRX_PRIVATE_KEY))
 OWNER_ADDRESS = pk.public_key.to_base58check_address()
+
+print("✅ 熱錢包地址：", OWNER_ADDRESS)
 
 # =====================
 # 🤖 指令
@@ -179,7 +193,7 @@ def main():
             await asyncio.sleep(POLL_INTERVAL)
 
     async def on_start(app):
-        await poll_trc20(app)  # 初始化吃掉舊交易
+        await poll_trc20(app)  # 啟動時吃掉舊交易
         app.create_task(loop())
 
     app.post_init = on_start
