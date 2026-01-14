@@ -8,7 +8,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
-RECEIVE_ADDRESS = "`TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo`"
+RECEIVE_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"
 
 FIXED_RATE_TRX = 3.2     # 固定匯率：1 USDT = 3.2 TRX
 FEE_RATE = 0.05           # 手續費 5%（只改這行）
@@ -64,6 +64,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
