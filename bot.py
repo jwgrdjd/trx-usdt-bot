@@ -2,20 +2,17 @@ import os
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# 從 Railway 環境變數讀取
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
-# 匯率設定（你可自行調低）
-TRX_RATE = 0.305  # 1 TRX = 0.305 USDT（已含利差）
+TRX_RATE = 0.305
 USDT_AMOUNT = 10
-
 TRC20_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"
 
 
 async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     trx_amount = USDT_AMOUNT / TRX_RATE
 
-    message = (
+    text = (
         "💱 USDT → TRX 兌換報價\n\n"
         f"USDT：{USDT_AMOUNT}\n"
         f"可兌換 TRX：約 {trx_amount:.2f}\n\n"
@@ -25,7 +22,7 @@ async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "轉帳完成後請耐心等待處理"
     )
 
-    await update.message.reply_text(message, parse_mode="Markdown")
+    await update.message.reply_text(text, parse_mode="Markdown")
 
 
 def main():
@@ -34,8 +31,6 @@ def main():
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("usdt", usdt))
-
-    print("Bot is running...")
     app.run_polling()
 
 
