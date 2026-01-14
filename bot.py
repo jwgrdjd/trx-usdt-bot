@@ -118,71 +118,84 @@ def in_auto_time():
     h = datetime.now().hour
     return AUTO_START_HOUR <= h < AUTO_END_HOUR
 
-def poll_trc20(app):
-    try:
-        r = requests.get(
-            TRONGRID_URL,
-            headers=HEADERS,
-            params={"limit": 20},
-            timeout=10
+# =====================
+# 🧠 狀態（放在 poll_trc20 上面）
+# =====================
+seen_tx = set()
+initialized = False
+
+
+async def poll_trc20(app):
+    global initialized
+
+    print("[TRC20] polling...")
+
+    url = f"https://api.trongrid.io/v1/accounts/{HOT_WALLET_ADDRESS}/transactions/trc20"
+    headers = {"TRON-PRO-API-KEY": TRONGRID_API_KEY}
+
+    r = requests.get(url, headers=headers, params={"limit": 20}, timeout=10)
+    r.raise_for_status()
+
+    txs = r.json().get("data", [])
+
+    # 第一次啟動：只記錄，不通知（忽略舊帳）
+    if not initialized:
+        for tx in txs:
+            seen_tx.add(tx["transaction_id"])
+        initialized = True
+        print("✅ TRC20 初始化完成，開始監聽新交易")
+        return
+
+    # 第二次之後：只處理新交易
+    for tx in txs:
+        txid = tx["transaction_id"]
+        if txid in seen_tx:
+            continue
+
+        seen_tx.add(txid)
+
+        # 只看轉入熱錢包
+        if tx["to"] != HOT_WALLET_ADDRESS:
+            continue
+
+        usdt_amount = float(tx["value"]) / 1_000_000
+        from_addr = tx["from"]
+
+        # ✅ 一定先通知入帳
+        await app.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=(
+                "🔔 <b>USDT 入帳</b>\n\n"
+                f"金額：{usdt_amount} USDT\n"
+                f"來源：<code>{from_addr}</code>"
+            ),
+            parse_mode="HTML"
         )
-        r.raise_for_status()
 
-        for tx in r.json().get("data", []):
-            txid = tx["transaction_id"]
-            if txid in SEEN_TX:
-                continue
+        # 不符合自動出金條件就停
+        if usdt_amount < MIN_USDT:
+            continue
 
-            SEEN_TX.add(txid)
+        trx_amount = round(usdt_amount * FIXED_RATE_TRX * (1 - FEE_RATE), 2)
 
-            if tx.get("to") != HOT_WALLET_ADDRESS:
-                continue
+        try:
+            tron.trx.transfer(
+                hot_wallet,
+                from_addr,
+                int(trx_amount * 1_000_000)
+            ).fee_limit(FEE_LIMIT_SUN).build().sign(private_key).broadcast()
 
-            if tx["block_timestamp"] / 1000 < START_TIME:
-                continue
-
-            usdt_amount = float(tx["value"]) / 1_000_000
-            if usdt_amount < MIN_USDT or usdt_amount > MAX_USDT:
-                continue
-
-            from_addr = tx["from"]
-            rate = FIXED_RATE_TRX * (1 - FEE_RATE)
-            trx_amount = round(usdt_amount * rate, 2)
-
-            auto_ok = (
-                AUTO_PAYOUT
-                and (not NIGHT_AUTO_ONLY or in_auto_time())
-            )
-
-            status = "🟡 待人工处理"
-
-            if auto_ok:
-                try:
-                    tron.trx.transfer(
-                        HOT_WALLET_ADDRESS,
-                        from_addr,
-                        int(trx_amount * 1_000_000)
-                    ).build().sign(private_key).broadcast()
-                    status = "✅ 已自动出金"
-                except Exception as e:
-                    status = f"❌ 出金失败：{e}"
-
-            msg = (
-                "🔔 <b>USDT 入账</b>\n\n"
-                f"金额：{usdt_amount} USDT\n"
-                f"来源：\n<code>{from_addr}</code>\n\n"
-                f"应付：{trx_amount} TRX\n"
-                f"{status}"
-            )
-
-            app.bot.send_message(
+            await app.bot.send_message(
                 chat_id=ADMIN_ID,
-                text=msg,
-                parse_mode="HTML"
+                text=f"✅ 已自动出金 {trx_amount} TRX"
             )
 
-    except Exception as e:
-        print("监听错误：", e)
+        except Exception as e:
+            await app.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=f"❌ 出金失败：{e}"
+            )
+
 
 # =====================
 # 🚀 启动
@@ -206,6 +219,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
