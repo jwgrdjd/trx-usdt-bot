@@ -41,7 +41,7 @@ if len(TRX_PRIVATE_KEY) != 64:
     raise RuntimeError("❌ 私鑰必須是 64 位 HEX")
 
 # =====================
-# 🔗 TRON 初始化（重點修正）
+# 🔗 TRON 初始化（正確）
 # =====================
 
 provider = HTTPProvider("https://api.trongrid.io")
@@ -142,12 +142,15 @@ async def poll_trc20(app):
             await app.bot.send_message(
                 chat_id=ADMIN_ID,
                 text=(
-                    f"🔔 USDT 入帳\n\n"
-                    f"{usdt_amount} USDT\n"
+                    "🔔 USDT 入帳\n\n"
+                    f"金額：{usdt_amount} USDT\n"
                     f"來源：{from_addr}\n"
                     f"應付：{trx_amount} TRX\n"
-                    f"{status}"
+                    f"狀態：{status}\n"
+                    f"時間：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                 )
+            )
+
     except Exception as e:
         print("監聽錯誤：", e)
 
