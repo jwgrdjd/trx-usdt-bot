@@ -95,15 +95,19 @@ async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rate = FIXED_RATE_TRX * (1 - FEE_RATE)
     trx_amount = round(10 * rate, 2)
 
-    await update.message.reply_text(
-        "💱 <b>💱 USDT → TRX 实时汇率</b>\n\n"
-        f"USDT：10\n"
+    text = (
+        "💱 <b>USDT → TRX 实时汇率</b>\n\n"
+        "USDT：10\n"
         f"可得：約 {trx_amount} TRX\n\n"
-        "📥 收款地址：\n"
-        f"<code>{HOT_WALLET_ADDRESS}</code>",
+        "🏦 <b>TRC20 USDT 换 TRX 地址（点击复制）</b>\n"
+        f"<code>{HOT_WALLET_ADDRESS}</code>\n\n"
+        "⚠️ 请务必使用 <b>TRC20</b> 网络转账\n"
+        "转账完成后请耐心等待处理，预计 <b>3 分钟</b> 内完成闪兑"
+    )
+
+    await update.message.reply_text(
+        text=text,
         parse_mode="HTML"
-        "⚠️ 请务必使用 TRC20 网络转账\n"
-        "转账完成后请耐心等待处理，预计 3 分钟内完成闪兑"
     )
 
 # =====================
@@ -202,6 +206,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
