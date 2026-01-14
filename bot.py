@@ -23,7 +23,7 @@ HOT_WALLET_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"
 
 FIXED_RATE_TRX = 3.2
 FEE_RATE = 0.05
-MIN_USDT = 5.0
+MIN_USDT = 5
 
 POLL_INTERVAL = 30          # 秒
 FEE_LIMIT_SUN = 10_000_000  # 10 TRX 手續費上限
@@ -106,24 +106,30 @@ def poll_trc20(context: ContextTypes.DEFAULT_TYPE):
         txs = r.json().get("data", [])
 
         for tx in txs:
-            txid = tx["transaction_id"]
-            if txid in SEEN_TX:
-                continue
+    txid = tx["transaction_id"]
+    if txid in SEEN_TX:
+        continue
 
-            # 只處理「轉入熱錢包」
-            if tx.get("to") != HOT_WALLET_ADDRESS:
-                SEEN_TX.add(txid)
-                continue
+    print("DEBUG TX:", tx)
 
-            # 只抓啟動後的交易
-            if tx["block_timestamp"] / 1000 < START_TIME:
-                SEEN_TX.add(txid)
-                continue
+    if tx.get("token_info", {}).get("symbol") != "USDT":
+        SEEN_TX.add(txid)
+        continue
 
-            usdt_amount = float(tx["value"]) / 1_000_000
-            if usdt_amount < MIN_USDT:
-                SEEN_TX.add(txid)
-                continue
+    to_addr = tx.get("to")
+    if to_addr != HOT_WALLET_ADDRESS:
+        SEEN_TX.add(txid)
+        continue
+
+    if tx["block_timestamp"] / 1000 < START_TIME:
+        SEEN_TX.add(txid)
+        continue
+
+    usdt_amount = float(tx["value"]) / 1_000_000
+    if usdt_amount < MIN_USDT:
+        SEEN_TX.add(txid)
+        continue
+
 
             from_addr = tx["from"]
             SEEN_TX.add(txid)
@@ -177,3 +183,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
