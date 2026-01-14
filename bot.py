@@ -43,16 +43,19 @@ async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     trx_amount = round(DISPLAY_USDT * rate, 2)
 
     text = (
-        f"USDT → TRX 兌換報價\n\n"
-        f"USDT：{DISPLAY_USDT}\n"
-        f"可兌換 TRX：約 {trx_amount}\n\n"
-        f"最低兌換金額：{MIN_USDT} USDT\n\n"
-        f"TRC20 USDT 收款地址：\n"
-        f"{RECEIVE_ADDRESS}\n\n"
-        "請務必使用 TRC20 網路轉帳"
+        "<b>💱 USDT → TRX 兌換報價</b><br><br>"
+        f"USDT：{DISPLAY_USDT}<br>"
+        f"可兌換 TRX：約 <b>{trx_amount}</b><br><br>"
+        f"最低兌換金額：{MIN_USDT} USDT<br><br>"
+        "<b>📥 TRC20 USDT 收款地址</b><br>"
+        "<code>"
+        f"{RECEIVE_ADDRESS}"
+        "</code><br><br>"
+        "⚠️ 請務必使用 TRC20 網路轉帳"
     )
 
-    await update.message.reply_text(text)
+    await update.message.reply_text(text, parse_mode="HTML")
+
 
 
 
@@ -141,6 +144,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
