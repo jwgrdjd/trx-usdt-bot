@@ -42,7 +42,6 @@ async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "💱 USDT → TRX 兌換報價\n\n"
         f"USDT：{usdt_amount}\n"
         f"可兌換 TRX：約 {trx_amount}\n\n"
-        f"📊 匯率計算方式：\n"
         f"{FIXED_RATE_TRX} - ({FIXED_RATE_TRX} × {int(FEE_RATE*100)}%) = {round(final_rate, 2)} TRX\n\n"
         f"🔻 最低兌換金額：{MIN_USDT} USDT\n\n"
         "📥 TRC20 USDT 收款地址（可直接複製）\n"
@@ -69,6 +68,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
