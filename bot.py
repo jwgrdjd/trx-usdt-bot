@@ -13,6 +13,7 @@ from telegram.ext import (
 
 from tronpy import Tron
 from tronpy.keys import PrivateKey
+from tronpy.providers import HTTPProvider
 
 # =====================
 # 🔧 基本設定
@@ -24,7 +25,7 @@ TRX_PRIVATE_KEY = os.environ.get("TRX_PRIVATE_KEY")
 
 ADMIN_ID = 7757022123  # 管理員 Telegram ID
 
-USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"  # USDT TRC20
+USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
 HOT_WALLET_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"
 
 FIXED_RATE_TRX = 3.2
@@ -45,10 +46,18 @@ if len(TRX_PRIVATE_KEY) != 64:
     raise RuntimeError(f"❌ 私鑰長度錯誤（目前 {len(TRX_PRIVATE_KEY)}，必須是 64）")
 
 # =====================
-# 🔗 TRON 初始化
+# 🔗 TRON 初始化（正確用法）
 # =====================
 
-tron = Tron(api_key=TRONGRID_API_KEY)
+provider = HTTPProvider(
+    endpoint_uri="https://api.trongrid.io",
+    headers={
+        "TRON-PRO-API-KEY": TRONGRID_API_KEY
+    }
+)
+
+tron = Tron(provider=provider)
+
 private_key = PrivateKey(bytes.fromhex(TRX_PRIVATE_KEY))
 hot_wallet = private_key.public_key.to_base58check_address()
 
@@ -94,7 +103,7 @@ async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 🔁 鏈上監聽 + 自動出金
 # =====================
 
-async def poll_trc20(context: ContextTypes.DEFAULT_TYPE):
+async def poll_trc20(app):
     url = f"https://api.trongrid.io/v1/accounts/{HOT_WALLET_ADDRESS}/transactions/trc20"
     headers = {"TRON-PRO-API-KEY": TRONGRID_API_KEY}
 
@@ -115,7 +124,7 @@ async def poll_trc20(context: ContextTypes.DEFAULT_TYPE):
                 continue
 
             if tx["to"] != HOT_WALLET_ADDRESS:
-                continue  # ❗只吃「轉入」
+                continue  # 只處理「轉入」
 
             usdt_amount = float(tx["value"]) / 1_000_000
             if usdt_amount < MIN_USDT:
@@ -141,7 +150,6 @@ async def poll_trc20(context: ContextTypes.DEFAULT_TYPE):
                     .sign(private_key)
                     .broadcast()
                 )
-
                 status = "✅ 已出金"
             except Exception as e:
                 status = f"❌ 出金失敗：{e}"
@@ -155,7 +163,7 @@ async def poll_trc20(context: ContextTypes.DEFAULT_TYPE):
                 f"時間：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             )
 
-            await context.bot.send_message(
+            await app.bot.send_message(
                 chat_id=ADMIN_ID,
                 text=msg,
                 parse_mode="HTML",
@@ -176,7 +184,7 @@ async def main():
 
     async def loop():
         while True:
-            await poll_trc20(app.bot)
+            await poll_trc20(app)
             await asyncio.sleep(POLL_INTERVAL)
 
     asyncio.create_task(loop())
