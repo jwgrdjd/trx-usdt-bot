@@ -26,7 +26,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/usdt － 查看 10USDT 可兌換多少 TRX\n\n"
         f"最低兌換金額：{MIN_USDT} USDT\n"
         "網路：TRC20\n"
-        "匯率：固定"
     )
 
 async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -65,4 +64,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
