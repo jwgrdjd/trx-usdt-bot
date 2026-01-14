@@ -105,7 +105,7 @@ def poll_trc20(context: ContextTypes.DEFAULT_TYPE):
         r.raise_for_status()
         txs = r.json().get("data", [])
 
-        for tx in txs:
+for tx in txs:
     txid = tx["transaction_id"]
     if txid in SEEN_TX:
         continue
@@ -186,5 +186,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
