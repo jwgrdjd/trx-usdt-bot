@@ -1,21 +1,19 @@
 import os
 from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    ContextTypes,
-)
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # =====================
-# 🔧 可自行調整的設定
+# 🔧 可調整設定
 # =====================
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN")  # Railway Variables 設定
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+
 RECEIVE_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"
 
-FIXED_RATE_TRX = 3.2     # 固定匯率：1 USDT = 3.2 TRX
-FEE_RATE = 0.05           # 手續費 5%（之後你只改這行）
-MIN_USDT = 5           # 最低兌換金額
+FIXED_RATE_TRX = 3.2     # 1 USDT = 3.2 TRX
+FEE_RATE = 0.05           # 5% 手續費（之後只改這行）
+MIN_USDT = 5.0
+DEFAULT_USDT = 10.0       # 顯示用：usdt10
 
 # =====================
 # 🤖 指令
@@ -25,35 +23,35 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 USDT → TRX 自動兌換機器人\n\n"
         "📌 使用方式：\n"
-        "/usdt － 查看兌換資訊\n\n"
-        f"最低兌換金額：{MIN_USDT} USDT\n"
-        "網路：TRC20\n"
-        "匯率：固定"
+        "/usdt － 查看 usdt10 可兌換多少 TRX\n\n"
+        f"🔻 最低兌換金額：{MIN_USDT} USDT\n"
+        "🌐 網路：TRC20\n"
+        "💱 匯率：固定"
     )
 
 async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    usdt_amount = 5.0  # 目前顯示用（你之後可再調）
+    usdt_amount = DEFAULT_USDT
 
-    fee_trx = FIXED_RATE_TRX * FEE_RATE
-    final_rate = FIXED_RATE_TRX - fee_trx
+    final_rate = FIXED_RATE_TRX * (1 - FEE_RATE)
     trx_amount = round(usdt_amount * final_rate, 2)
 
     text = (
-        "💱 USDT → TRX 兌換報價\n\n"
-        f"USDT：{usdt_amount}\n"
-        f"可兌換 TRX：約 {trx_amount}\n\n"
-        f"🔻 最低兌換金額：{MIN_USDT} USDT\n\n"
-        "📥 TRC20 USDT 收款地址\n"
-        "（點擊即可複製）\n\n"
+        "💱 *USDT → TRX 兌換報價*\n\n"
+        f"*USDT：* {usdt_amount}\n"
+        f"*可兌換 TRX：* 約 {trx_amount}\n\n"
+        f"🔻 *最低兌換金額：* {MIN_USDT} USDT\n\n"
+        "📥 *TRC20 USDT 收款地址（點擊即可複製）*\n\n"
         "```\n"
         f"{RECEIVE_ADDRESS}\n"
         "```\n"
-        "⚠️ 請務必使用 TRC20 網路轉帳\n"
+        "⚠️ 請務必使用 *TRC20* 網路轉帳\n"
         "轉帳完成後請耐心等待處理"
     )
 
-    await update.message.reply_text(text)
-
+    await update.message.reply_text(
+        text,
+        parse_mode="Markdown"
+    )
 
 # =====================
 # 🚀 啟動
@@ -73,10 +71,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
