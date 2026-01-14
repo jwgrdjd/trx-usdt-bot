@@ -61,21 +61,30 @@ START_TIME = time.time()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 USDT → TRX 自動兌換機器人\n\n"
-        "/usdt 查看兌換資訊\n"
-        f"最低兌換：{MIN_USDT} USDT\n"
-        "模式：自動出金（燒 TRX）"
+        "🤖 USDT → TRX 自动兑换机器人\n\n"
+        "📌 使用方式：\n"
+        "/usdt － 查看兑换报价\n\n"
+        f"🔻 最低兑换金额：{MIN_USDT} USDT\n"
+        "🌐 网络：TRC20\n"
     )
+
 
 async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     trx_amount = round(10 * FIXED_RATE_TRX * (1 - FEE_RATE), 2)
 
     await update.message.reply_text(
-        f"💱 USDT → TRX\n\n"
-        f"USDT：10\n"
-        f"可得：約 {trx_amount} TRX\n\n"
-        f"收款地址：\n{HOT_WALLET_ADDRESS}"
+        f"💱 <b>USDT → TRX 实时汇率</b>\n\n"
+        f"USDT：{DISPLAY_USDT}\n"
+        f"可兑换 TRX：约 {trx_amount}\n\n"
+        f"🔻 最低兑换金额：{MIN_USDT} USDT\n\n"
+        "📥 <b>TRC20 USDT 换 TRX地址（点击地址自动复制）</b>\n"
+        "<code>"
+        f"{HOT_WALLET_ADDRESS}"
+        "</code>\n\n"
+        "⚠️ 请务必使用 TRC20 网络转账\n"
+        "转账完成后请耐心等待处理，预计3分钟内完成闪兑"
     )
+
 
 # =====================
 # 🔁 鏈上監聽 + 出金
@@ -158,3 +167,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
