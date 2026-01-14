@@ -10,8 +10,8 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
 TRC20_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"
 
-DISPLAY_USDT = 10.0     # 顯示用金額（10 USDT）
-MIN_USDT = 5.0          # 最低兌換金額
+DISPLAY_USDT = 10     # 顯示用金額（10 USDT）
+MIN_USDT = 5          # 最低兌換金額
 FIXED_RATE_TRX = 3.2    # 固定匯率：1 USDT = 3.2 TRX
 FEE_RATE = 0.05         # 手續費 5%（之後只改這行）
 
@@ -73,4 +73,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
