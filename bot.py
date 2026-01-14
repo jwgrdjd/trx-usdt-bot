@@ -1,5 +1,4 @@
 import os
-import time
 import asyncio
 import requests
 from datetime import datetime, time as dtime
@@ -9,6 +8,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 from tronpy import Tron
 from tronpy.keys import PrivateKey
+from tronpy.providers import HTTPProvider
 
 # =====================
 # 🔧 基本設定
@@ -44,12 +44,17 @@ TRONGRID_URL = f"https://api.trongrid.io/v1/accounts/{TRC20_ADDRESS}/transaction
 HEADERS = {"TRON-PRO-API-KEY": TRONGRID_API_KEY}
 
 # =====================
-# 🔐 TRX Client
+# 🔐 TRON Client
 # =====================
 
-tron = Tron(provider=Tron.HTTPProvider(api_key=TRONGRID_API_KEY))
+tron = Tron(
+    provider=HTTPProvider(
+        api_key=TRONGRID_API_KEY
+    )
+)
+
 pk = PrivateKey(bytes.fromhex(TRX_PRIVATE_KEY))
-owner_addr = pk.public_key.to_base58check_address()
+OWNER_ADDRESS = pk.public_key.to_base58check_address()
 
 # =====================
 # 🤖 指令
@@ -69,7 +74,7 @@ async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "💱 <b>USDT → TRX 兌換</b>\n\n"
         "USDT：10\n"
         f"可兌換 TRX：約 {trx_amount}\n\n"
-        f"最低：{MIN_USDT} USDT\n\n"
+        f"最低兌換：{MIN_USDT} USDT\n\n"
         "<b>TRC20 USDT 收款地址</b>\n"
         f"<code>{TRC20_ADDRESS}</code>"
     )
@@ -82,7 +87,12 @@ async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def poll_trc20(app):
     try:
-        r = requests.get(TRONGRID_URL, headers=HEADERS, params={"limit": 10}, timeout=10)
+        r = requests.get(
+            TRONGRID_URL,
+            headers=HEADERS,
+            params={"limit": 10},
+            timeout=10
+        )
         r.raise_for_status()
         data = r.json().get("data", [])
 
@@ -93,6 +103,7 @@ async def poll_trc20(app):
 
             last_seen_tx.add(txid)
 
+            # 只處理「轉入」
             if tx.get("to") != TRC20_ADDRESS:
                 continue
 
@@ -104,31 +115,30 @@ async def poll_trc20(app):
 
             now = datetime.now().time()
             in_time = ALLOWED_START <= now <= ALLOWED_END
-            can_auto = (
-                AUTO_PAYOUT_ENABLED
-                and usdt_amount <= MAX_AUTO_USDT
-                and in_time
-            )
 
             final_rate = FIXED_RATE_TRX * (1 - FEE_RATE)
             trx_amount = round(usdt_amount * final_rate, 6)
 
             status = "❌ 未出金"
-            txid_trx = None
+            trx_txid = None
 
-            if can_auto:
+            if (
+                AUTO_PAYOUT_ENABLED
+                and usdt_amount <= MAX_AUTO_USDT
+                and in_time
+            ):
                 try:
                     txn = (
                         tron.trx.transfer(
-                            owner_addr,
+                            OWNER_ADDRESS,
                             from_addr,
-                            int(trx_amount * 1_000_000),
+                            int(trx_amount * 1_000_000)
                         )
                         .build()
                         .sign(pk)
                         .broadcast()
                     )
-                    txid_trx = txn["txid"]
+                    trx_txid = txn["txid"]
                     status = "✅ 已自動出金"
                 except Exception as e:
                     status = f"⚠️ 出金失敗：{e}"
@@ -141,13 +151,13 @@ async def poll_trc20(app):
                 f"狀態：{status}\n"
             )
 
-            if txid_trx:
-                msg += f"\nTRX TXID：<code>{txid_trx}</code>"
+            if trx_txid:
+                msg += f"\nTRX TXID：<code>{trx_txid}</code>"
 
             await app.bot.send_message(
                 chat_id=ADMIN_ID,
                 text=msg,
-                parse_mode="HTML",
+                parse_mode="HTML"
             )
 
     except Exception as e:
@@ -159,6 +169,7 @@ async def poll_trc20(app):
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("usdt", usdt))
 
