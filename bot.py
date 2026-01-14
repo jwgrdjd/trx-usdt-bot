@@ -100,7 +100,7 @@ async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"USDT：10\n"
         f"可得：約 {trx_amount} TRX\n\n"
         "📥 收款地址：\n"
-        ⚠️ 请务必使用 TRC20 网络转账\n"
+        "⚠️ 请务必使用 TRC20 网络转账\n"
         "转账完成后请耐心等待处理，预计 3 分钟内完成闪兑"
         f"<code>{HOT_WALLET_ADDRESS}</code>",
         parse_mode="HTML"
@@ -202,3 +202,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
