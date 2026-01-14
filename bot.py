@@ -1,68 +1,97 @@
 import os
 import requests
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-
-# === 基本設定 ===
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-
-TRC20_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"
-
-MIN_USDT = 5.0          # 最小金額
-SPREAD_RATE = 0.05      # 5% 利差
-DISPLAY_USDT = 5.0      # 顯示用金額（固定）
-
-# ✅ 改用 USD（最穩定）
-COINGECKO_URL = (
-    "https://api.coingecko.com/api/v3/simple/price"
-    "?ids=tron&vs_currencies=usd"
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
 )
 
-HEADERS = {
-    "User-Agent": "trx-usdt-bot"
-}
+# ======================
+# 基本設定
+# ======================
 
+BOT_TOKEN = os.environ.get("BOT_TOKEN")  # Railway Variables 設定
+TRC20_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"
 
-def get_trx_price():
-    r = requests.get(COINGECKO_URL, headers=HEADERS, timeout=5)
-    data = r.json()
-    return float(data["tron"]["usd"])
+DEFAULT_USDT = 10.0
+MIN_USDT = 5.0
+FEE_RATE = 0.05  # 5% 利差
 
+# ======================
+# 匯率取得
+# ======================
+
+def get_trx_price_usdt():
+    try:
+        url = "https://api.coingecko.com/api/v3/simple/price"
+        params = {
+            "ids": "tron",
+            "vs_currencies": "usdt"
+        }
+        r = requests.get(url, params=params, timeout=10)
+        data = r.json()
+        return float(data["tron"]["usdt"])
+    except Exception:
+        return None
+
+# ======================
+# /start
+# ======================
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "🤖 USDT → TRX 自動兌換機器人\n\n"
+        "📌 使用方式：\n"
+        "/usdt\n\n"
+        "🔻 最小兌換金額：5 USDT\n"
+        "💰 即時匯率（含 5% 利差）\n"
+        "🌐 網路：TRC20\n\n"
+        "輸入 /usdt 查看最新兌換報價"
+    )
+    await update.message.reply_text(text)
+
+# ======================
+# /usdt
+# ======================
 
 async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        market_price = get_trx_price()
-    except Exception:
+    price = get_trx_price_usdt()
+
+    if price is None:
         await update.message.reply_text("⚠️ 目前無法取得匯率，請稍後再試")
         return
 
-    used_price = market_price * (1 + SPREAD_RATE)
-    trx_amount = DISPLAY_USDT / used_price
+    effective_price = price * (1 + FEE_RATE)
+    trx_amount = round(DEFAULT_USDT / effective_price, 2)
 
     text = (
-        "💱 USDT → TRX 兌換報價（即時）\n\n"
-        f"USDT：{DISPLAY_USDT}\n"
-        f"可兌換 TRX：約 {trx_amount:.2f}\n\n"
-        f"🔻 最小兌換金額：{MIN_USDT} USDT\n\n"
+        "💱 USDT → TRX 兌換報價\n\n"
+        f"USDT：{DEFAULT_USDT}\n"
+        f"可兌換 TRX：約 {trx_amount}\n\n"
         "📥 TRC20 USDT 收款地址（可直接複製）\n"
-        f"<code>{TRC20_ADDRESS}</code>\n\n"
+        f"{TRC20_ADDRESS}\n\n"
         "⚠️ 請務必使用 TRC20 網路轉帳\n"
         "轉帳完成後請耐心等待處理"
     )
 
-    await update.message.reply_text(text, parse_mode="HTML")
+    await update.message.reply_text(text)
 
+# ======================
+# 主程式
+# ======================
 
 def main():
     if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN not set")
+        raise RuntimeError("BOT_TOKEN 未設定")
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("usdt", usdt))
 
-    print("Bot is running with dynamic rate (USD based)...")
+    print("Bot started...")
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
