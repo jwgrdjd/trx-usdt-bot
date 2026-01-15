@@ -2,6 +2,7 @@ import os
 import time
 import asyncio
 import requests
+import json
 from datetime import datetime
 
 from telegram import Update
@@ -24,21 +25,23 @@ if not BOT_TOKEN or not TRONGRID_API_KEY:
 # =====================
 # 🔒 模式開關
 # =====================
-AUTO_PAYOUT = True       # 是否開啟自動出金
-NIGHT_AUTO_ONLY = True   # 是否僅夜間自動
-AUTO_START_HOUR = 0      # 00:00
-AUTO_END_HOUR = 10       # 10:00
+AUTO_PAYOUT = True       
+NIGHT_AUTO_ONLY = False  
+AUTO_START_HOUR = 0      
+AUTO_END_HOUR = 10       
 
 FIXED_RATE_TRX = 3.2
 FEE_RATE = 0.05
 MIN_USDT = 5
 MAX_USDT = 100
+FUEL_AMOUNT = 5          
 
 ADMIN_ID = 7757022123
 HOT_WALLET_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"
+FUEL_DB = "fuel_status.json"
 
 # =====================
-# 🔗 Tron 初始化 (帶入 API Key 防止 429)
+# 🔗 Tron 初始化
 # =====================
 provider = HTTPProvider(api_key=TRONGRID_API_KEY)
 tron = Tron(provider)
@@ -50,13 +53,20 @@ if AUTO_PAYOUT:
     private_key = PrivateKey(bytes.fromhex(TRX_PRIVATE_KEY))
 
 # =====================
-# 🔁 監聽設定
+# 💾 信用數據庫操作
 # =====================
-SEEN_TX = set()
-START_TIME = time.time()
-POLL_INTERVAL = 30
-TRONGRID_URL = f"https://api.trongrid.io/v1/accounts/{HOT_WALLET_ADDRESS}/transactions/trc20"
-HEADERS = {"TRON-PRO-API-KEY": TRONGRID_API_KEY}
+def get_fuel_status(address):
+    if not os.path.exists(FUEL_DB): return None
+    with open(FUEL_DB, "r") as f:
+        return json.load(f).get(address)
+
+def update_fuel_status(address, status):
+    data = {}
+    if os.path.exists(FUEL_DB):
+        with open(FUEL_DB, "r") as f: data = json.load(f)
+    if status is None: data.pop(address, None)
+    else: data[address] = status
+    with open(FUEL_DB, "w") as f: json.dump(data, f)
 
 # =====================
 # 🤖 Telegram 指令
@@ -65,14 +75,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 USDT → TRX 自动兑换机器人\n\n"
         "📌 使用方式：\n"
-        "/usdt － 查看兑换报价\n\n"
+        "/usdt － 查看兑换报价\n"
+        f"/fuel [地址] － 预支 {FUEL_AMOUNT} TRX 手续费\n"
+        f"⚠️ 注意：预支的 TRX 将在下次兑换时从应付金额中扣除。\n\n"
         f"🔻 最低兑换金额：{MIN_USDT} USDT\n"
         "🌐 网络：TRC20\n"
     )
 
 async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     trx_amount = round(10 * FIXED_RATE_TRX * (1 - FEE_RATE), 2)
-
     text = (
         "💱 <b>USDT → TRX 实时汇率</b>\n\n"
         "USDT：10\n"
@@ -82,90 +93,110 @@ async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚠️ 请务必使用 TRC20 网络转账\n"
         "转账完成后请耐心等待处理，预计 3 分钟内完成闪兑"
     )
+    await update.message.reply_text(text, parse_mode="HTML")
 
-    await update.message.reply_text(
-        text,
-        parse_mode="HTML"
-    )
+async def fuel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("❌ 格式：/fuel TXXXXXXXX")
+        return
+    addr = context.args[0]
+    if get_fuel_status(addr) == "pending":
+        await update.message.reply_text("⚠️ 您有一笔借款尚未归还，请完成兑换后再借。")
+        return
+    try:
+        txn = tron.trx.transfer(HOT_WALLET_ADDRESS, addr, int(FUEL_AMOUNT * 1_000_000)).build().sign(private_key)
+        txn.broadcast()
+        update_fuel_status(addr, "pending")
+        await update.message.reply_text(f"✅ 已预支 {FUEL_AMOUNT} TRX！下次兑换时將自動扣回。")
+    except Exception as e:
+        await update.message.reply_text(f"❌ 借款失败：{e}")
+
+async def pending_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID: return
+    if not os.path.exists(FUEL_DB):
+        await update.message.reply_text("目前没有借款纪录。")
+        return
+    with open(FUEL_DB, "r") as f: data = json.load(f)
+    pending_addrs = [addr for addr, status in data.items() if status == "pending"]
+    if not pending_addrs:
+        await update.message.reply_text("✅ 目前没有未归还的借款。")
+        return
+    text = f"📋 <b>未归还借款清单 ({len(pending_addrs)} 筆)</b>\n\n"
+    for i, addr in enumerate(pending_addrs, 1):
+        text += f"{i}. <code>{addr}</code>\n"
+    await update.message.reply_text(text, parse_mode="HTML")
 
 # =====================
-# 🔍 核心監聽邏輯 (改為 async)
+# 🔍 核心監聽邏輯
 # =====================
-def in_auto_time():
-    h = datetime.now().hour
-    return AUTO_START_HOUR <= h < AUTO_END_HOUR
+SEEN_TX = set()
+START_TIME = time.time()
+TRONGRID_URL = f"https://api.trongrid.io/v1/accounts/{HOT_WALLET_ADDRESS}/transactions/trc20"
+HEADERS = {"TRON-PRO-API-KEY": TRONGRID_API_KEY}
 
 async def poll_trc20(app):
     try:
-        # 使用請求庫獲取數據
         r = requests.get(TRONGRID_URL, headers=HEADERS, params={"limit": 20}, timeout=10)
         r.raise_for_status()
-        data = r.json().get("data", [])
-
-        for tx in data:
+        for tx in r.json().get("data", []):
             txid = tx["transaction_id"]
-            if txid in SEEN_TX: continue
-            SEEN_TX.add(txid)
-
-            if tx.get("to") != HOT_WALLET_ADDRESS: continue
+            if txid in SEEN_TX or tx.get("to") != HOT_WALLET_ADDRESS: continue
             if tx["block_timestamp"] / 1000 < START_TIME: continue
+            SEEN_TX.add(txid)
 
             usdt_amount = float(tx["value"]) / 1_000_000
             from_addr = tx["from"]
-            rate = FIXED_RATE_TRX * (1 - FEE_RATE)
-            trx_amount = round(usdt_amount * rate, 2)
-
-            auto_ok = AUTO_PAYOUT and (not NIGHT_AUTO_ONLY or in_auto_time())
             
-            # 只有金額在限制內才自動出金
-            if usdt_amount < MIN_USDT or usdt_amount > MAX_USDT:
-                auto_ok = False
+            rate = FIXED_RATE_TRX * (1 - FEE_RATE)
+            raw_trx_amount = round(usdt_amount * rate, 2)
+            
+            is_repaying = (get_fuel_status(from_addr) == "pending")
+            loan_text = f"有 (需扣除 {FUEL_AMOUNT} TRX)" if is_repaying else "无"
+            final_pay = round(raw_trx_amount - (FUEL_AMOUNT if is_repaying else 0), 2)
 
-            status = "🟡 待人工處理"
-
+            auto_ok = AUTO_PAYOUT and (MIN_USDT <= usdt_amount <= MAX_USDT)
+            
+            status_display = "🟡 待人工處理"
             if auto_ok:
                 try:
-                    # 發送 TRX
-                    txn = tron.trx.transfer(HOT_WALLET_ADDRESS, from_addr, int(trx_amount * 1_000_000))
-                    txn.build().sign(private_key).broadcast()
-                    status = "✅ 已自動出金"
+                    txn = tron.trx.transfer(HOT_WALLET_ADDRESS, from_addr, int(final_pay * 1_000_000)).build().sign(private_key)
+                    txn.broadcast()
+                    if is_repaying: update_fuel_status(from_addr, None)
+                    status_display = "✅ <b>已自動出金</b>"
                 except Exception as e:
-                    status = f"❌ 出金失敗：{str(e)}"
+                    status_display = f"❌ <b>自動出金失敗</b>：{str(e)}"
 
             msg = (
                 "🔔 <b>USDT 入帳通知</b>\n\n"
-                f"金額：{usdt_amount} USDT\n"
-                f"來源：<code>{from_addr}</code>\n"
-                f"應付：{trx_amount} TRX\n"
-                f"狀態：<b>{status}</b>"
+                f"<b>金額</b>：{usdt_amount} USDT\n"
+                f"<b>來源</b>：<code>{from_addr}</code>\n"
+                f"--------------------------\n"
+                f"<b>應付總計</b>：{raw_trx_amount} TRX\n"
+                f"<b>有無借款</b>：{loan_text}\n"
+                f"<b>扣除後應發</b>：<u>{final_pay} TRX</u>\n"
+                f"--------------------------\n"
+                f"<b>狀態</b>：{status_display}"
             )
-
-            # 重要：使用 await 發送訊息
-            await app.bot.send_message(
-                chat_id=ADMIN_ID,
-                text=msg,
-                parse_mode="HTML"
-            )
-
+            await app.bot.send_message(chat_id=ADMIN_ID, text=msg, parse_mode="HTML")
     except Exception as e:
         print(f"監聽錯誤：{e}")
 
 # =====================
-# 🚀 啟動邏輯 (修正事件循環衝突)
+# 🚀 啟動邏輯
 # =====================
 async def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("usdt", usdt))
+    app.add_handler(CommandHandler("fuel", fuel))
+    app.add_handler(CommandHandler("pending", pending_list))
 
-    # 啟動 Bot
     await app.initialize()
     await app.start()
     await app.updater.start_polling()
 
-    print(f"🤖 Bot 已啟動 | 自動出金: {AUTO_PAYOUT} | 夜間模式: {NIGHT_AUTO_ONLY}")
+    print(f"🤖 Bot 已啟動 | 自動出金: {AUTO_PAYOUT}")
 
-    # 異步監聽循環
     try:
         while True:
             await poll_trc20(app)
@@ -175,9 +206,7 @@ async def main():
         await app.shutdown()
 
 if __name__ == "__main__":
-    import asyncio
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         print("停止機器人")
-
