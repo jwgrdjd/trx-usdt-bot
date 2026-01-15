@@ -62,18 +62,31 @@ HEADERS = {"TRON-PRO-API-KEY": TRONGRID_API_KEY}
 # 🤖 Telegram 指令
 # =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 USDT → TRX 自動兌換機器人已啟動\n/usdt 查看地址")
+    await update.message.reply_text(
+        "🤖 USDT → TRX 自动兑换机器人\n\n"
+        "📌 使用方式：\n"
+        "/usdt － 查看兑换报价\n\n"
+        f"🔻 最低兑换金额：{MIN_USDT} USDT\n"
+        "🌐 网络：TRC20\n"
+    )
 
 async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    rate = FIXED_RATE_TRX * (1 - FEE_RATE)
-    trx_amount = round(10 * rate, 2)
+    trx_amount = round(10 * FIXED_RATE_TRX * (1 - FEE_RATE), 2)
+
     text = (
-        "💱 <b>USDT → TRX 報價</b>\n\n"
-        f"10 USDT ≈ {trx_amount} TRX\n\n"
-        f"🏦 <b>TRC20 USDT 地址</b>\n<code>{HOT_WALLET_ADDRESS}</code>\n\n"
-        "≤100 USDT 將自動處理"
+        "💱 <b>USDT → TRX 实时汇率</b>\n\n"
+        "USDT：10\n"
+        f"可得：約 {trx_amount} TRX\n\n"
+        "📥 <b>TRC20 USDT 换 TRX 地址（点击可复制）</b>\n"
+        f"<code>{HOT_WALLET_ADDRESS}</code>\n\n"
+        "⚠️ 请务必使用 TRC20 网络转账\n"
+        "转账完成后请耐心等待处理，预计 3 分钟内完成闪兑"
     )
-    await update.message.reply_text(text, parse_mode="HTML")
+
+    await update.message.reply_text(
+        text,
+        parse_mode="HTML"
+    )
 
 # =====================
 # 🔍 核心監聽邏輯 (改為 async)
@@ -167,3 +180,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("停止機器人")
+
