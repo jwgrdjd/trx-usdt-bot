@@ -75,7 +75,7 @@ def incr_daily_count():
 def remove_claim(address, user_id):
     if r:
         r.delete(f"claimed_addr:{address}")
-        r.delete(f"claimed_user:{user_id}")
+        r.delete(f"user:{user_id}")
 
 # =====================
 # 🤖 客戶端指令 (簡體中文)
@@ -87,13 +87,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /usdt － 获取实时汇率与收款地址\n"
         "• <b>直接发送钱包地址</b> － 预支 5 TRX 手续费\n\n"
         f"💡 <i>温馨提示：若您的钱包 TRX 余额不足无法转账，请在此直接发送您的 TRX 钱包地址，系统将为您预支 {FUEL_AMOUNT} TRX 手续费。</i>\n\n"
-        "🔴 <b>USDT → TRX 最低兑换：{MIN_USDT} USDT</b>"
+        f"🔴 <b>USDT → TRX 最低兑换：{MIN_USDT} USDT</b>"
     )
     await update.message.reply_text(welcome_text, parse_mode="HTML")
 
 async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rate = round(FIXED_RATE_TRX * (1 - FEE_RATE), 2)
-text = (
+    trx_amount = round(10 * FIXED_RATE_TRX * (1 - FEE_RATE), 2)
+    text = (
         "💱 <b>USDT → TRX 实时汇率</b>\n\n"
         "<b>当前汇率：</b> 1 USDT = <code>" + str(round(FIXED_RATE_TRX * (1-FEE_RATE), 2)) + "</code> TRX\n"
         f"<b>参考兑换：</b> 10 USDT ≈ <code>{trx_amount}</code> TRX\n\n"
@@ -101,7 +102,7 @@ text = (
         f"<code>{HOT_WALLET_ADDRESS}</code>\n\n"
         "--------------------------\n"
         "⚠️ <b>温馨提示：</b>\n"
-        "转账完成后请耐心等待处理，预计 3 分钟内完成闪兑"
+        "转账完成后请耐心等待处理，预计 3 分钟内完成闪兑\n"
         "若您的钱包 TRX 余额不足无法转账，请在此直接<b>发送您的 TRX 钱包地址</b>，系统将为您预支 5 TRX 手续费。"
     )
     await update.message.reply_text(text, parse_mode="HTML")
@@ -185,32 +186,4 @@ async def poll_trc20(app):
             # 繁體通知管理員
             msg = (f"🔔 <b>【USDT 入帳通知】</b>\n\n"
                    f"💰 金額: <code>{val}</code> USDT\n"
-                   f"👤 來源: <code>{from_addr}</code>\n"
-                   f"⛽ 扣除預支: {'🚩 是' if is_repaying else '否'}\n"
-                   f"💸 實發金額: <b>{final_pay} TRX</b>\n"
-                   f"📢 狀態: {status}")
-            await app.bot.send_message(chat_id=ADMIN_ID, text=msg, parse_mode="HTML")
-    except Exception as e: print(f"Scan Error: {e}")
-
-# =====================
-# 🚀 啟動
-# =====================
-async def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("usdt", usdt))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_address_message))
-    
-    await app.initialize(); await app.start(); await app.updater.start_polling()
-    print("🤖 機器人已在 Redis 繁簡分流模式下啟動")
-    
-    try:
-        while True:
-            await poll_trc20(app); await asyncio.sleep(POLL_INTERVAL)
-    finally:
-        await app.stop(); await app.shutdown()
-
-SEEN_TX = set(); START_TIME = time.time()
-if __name__ == "__main__":
-    try: asyncio.run(main())
-    except KeyboardInterrupt: print("Stopped")
+                   f"👤 來源:
