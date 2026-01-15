@@ -100,8 +100,8 @@ async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<code>{HOT_WALLET_ADDRESS}</code>\n\n"
         "--------------------------\n"
         "⚠️ <b>温馨提示：</b>\n"
-        "转账完成后请耐心等待处理，预计 3 分钟内完成闪兑\n"
-        "若您的钱包 TRX 余额不足无法转账，请在此直接<b>发送您的 TRX 钱包地址</b>，系统将为您预支 4 TRX 手续费。"
+        "转账完成后请耐心等待处理，预计 3 分钟内完成闪兑\n\n"
+        "🔴若您的钱包 TRX 余额不足无法转账，请在此直接<b>发送您的 TRX 钱包地址</b>，系统将为您预支 4 TRX 手续费。"
     )
     await update.message.reply_text(text, parse_mode="HTML")
 
@@ -194,3 +194,4 @@ SEEN_TX = set(); START_TIME = time.time()
 if __name__ == "__main__":
     try: asyncio.run(main())
     except KeyboardInterrupt: print("Stopped")
+
