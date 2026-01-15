@@ -6,19 +6,18 @@ import json
 from datetime import datetime
 
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, PicklePersistence
 
 from tronpy import Tron
 from tronpy.keys import PrivateKey
 from tronpy.providers import HTTPProvider
 
 # =====================
-# 📁 數據持久化路徑 (絕對路徑加固)
+# 📁 數據持久化設定 (GitHub/雲端環境專用)
 # =====================
-# 獲取目前程式碼所在的絕對資料夾路徑，確保更新時紀錄不丟失
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-FUEL_DB = os.path.join(BASE_DIR, "fuel_status.json")
-STATS_DB = os.path.join(BASE_DIR, "daily_stats.json")
+# 將持久化路徑指向絕對路徑
+PERSISTENCE_FILE = os.path.join(BASE_DIR, "bot_persistence_data")
 
 # =====================
 # 🔧 環境變數與核心設定
@@ -47,61 +46,7 @@ tron = Tron(provider)
 private_key = PrivateKey(bytes.fromhex(TRX_PRIVATE_KEY)) if AUTO_PAYOUT else None
 
 # =====================
-# 💾 安全數據庫操作
-# =====================
-def get_fuel_status(address, user_id):
-    if not os.path.exists(FUEL_DB): return None
-    try:
-        with open(FUEL_DB, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            if data.get(address) == "pending" or data.get(str(user_id)) == "pending":
-                return "pending"
-    except: pass
-    return None
-
-def update_fuel_status(address, user_id, status):
-    data = {}
-    if os.path.exists(FUEL_DB):
-        try:
-            with open(FUEL_DB, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except: data = {}
-    
-    if status is None:
-        data.pop(address, None)
-        data.pop(str(user_id), None)
-    else:
-        data[address] = status
-        data[str(user_id)] = status
-        
-    with open(FUEL_DB, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
-
-def check_daily_limit():
-    today = datetime.now().strftime("%Y-%m-%d")
-    data = {"date": today, "count": 0}
-    if os.path.exists(STATS_DB):
-        try:
-            with open(STATS_DB, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if data.get("date") != today: data = {"date": today, "count": 0}
-        except: pass
-    return (data["count"] < DAILY_LIMIT), data["count"]
-
-def increment_daily_count():
-    today = datetime.now().strftime("%Y-%m-%d")
-    data = {"date": today, "count": 0}
-    if os.path.exists(STATS_DB):
-        try:
-            with open(STATS_DB, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except: pass
-    data["count"] += 1
-    with open(STATS_DB, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
-
-# =====================
-# 🤖 客戶端指令 (簡體中文)
+# 🤖 客戶端指令
 # =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
@@ -133,61 +78,53 @@ async def handle_address_message(update: Update, context: ContextTypes.DEFAULT_T
     text = update.message.text.strip()
     user = update.effective_user
     if len(text) == 34 and text.startswith("T"):
-        # 1. 檢查每日限額
-        can_loan, current_count = check_daily_limit()
-        if not can_loan:
+        today = datetime.now().strftime("%Y-%m-%d")
+        
+        # 初始化 bot_data (這會被持久化)
+        if "stats" not in context.bot_data or context.bot_data["stats"].get("date") != today:
+            context.bot_data["stats"] = {"date": today, "count": 0}
+        if "records" not in context.bot_data:
+            context.bot_data["records"] = {}
+
+        # 1. 檢查限制
+        if context.bot_data["stats"]["count"] >= DAILY_LIMIT:
             await update.message.reply_text("🔴 <b>今日预支名额已满，请明天再试。</b>", parse_mode="HTML")
             return
             
-        # 2. 檢查是否領取過 (雙重判定)
-        if get_fuel_status(text, user.id) == "pending":
+        # 2. 檢查重複
+        if text in context.bot_data["records"] or str(user.id) in context.bot_data["records"]:
             await update.message.reply_text("🟡 <b>提示：您已领取过预支 TRX，请完成兑换后再领。</b>", parse_mode="HTML")
             return
 
-        # 🔥【先鎖定】: 在發送前就寫入資料庫，防止重複觸發
-        update_fuel_status(text, user.id, "pending")
+        # 🔥 先寫入紀錄
+        context.bot_data["records"][text] = "pending"
+        context.bot_data["records"][str(user.id)] = "pending"
 
         try:
-            # 3. 執行轉帳
+            # 3. 發款
             txn = tron.trx.transfer(HOT_WALLET_ADDRESS, text, int(FUEL_AMOUNT * 1_000_000)).build().sign(private_key)
             txn.broadcast()
             
-            # 4. 更新每日計數
-            increment_daily_count()
+            # 4. 更新計數
+            context.bot_data["stats"]["count"] += 1
             
-            # 5. 回覆與通知管理員
-            await update.message.reply_text(f"✅ <b>预支TRX发放成功！</b>\n\n已向您的地址发送 <code>{FUEL_AMOUNT}</code> TRX。该款项将在您兑换成功时自动扣回。", parse_mode="HTML")
+            await update.message.reply_text(f"✅ <b>预支TRX发放成功！</b>\n\n已向您的地址发送 <code>{FUEL_AMOUNT}</code> TRX。", parse_mode="HTML")
             
             admin_notice = (
                 "⛽ <b>預支發放通知</b>\n\n"
-                f"👤 <b>用戶 ID：</b> <code>{user.id}</code>\n"
-                f"👤 <b>用戶名：</b> @{user.username if user.username else '無'}\n"
-                f"📥 <b>錢包地址：</b> <code>{text}</code>\n"
-                f"📊 <b>今日進度：</b> {current_count + 1} / {DAILY_LIMIT}"
+                f"👤 <b>用戶：</b> @{user.username if user.username else user.id}\n"
+                f"📥 <b>地址：</b> <code>{text}</code>\n"
+                f"📊 <b>今日進度：</b> {context.bot_data['stats']['count']} / {DAILY_LIMIT}"
             )
             await context.bot.send_message(chat_id=ADMIN_ID, text=admin_notice, parse_mode="HTML")
-
         except Exception as e:
-            # 如果轉帳失敗，才解除鎖定
-            update_fuel_status(text, user.id, None)
+            # 失敗才移除
+            context.bot_data["records"].pop(text, None)
             await update.message.reply_text("❌ <b>发放失败，请联系客服处理。</b>", parse_mode="HTML")
-            await context.bot.send_message(chat_id=ADMIN_ID, text=f"❌ <b>預支發放錯誤：</b>\n{str(e)}")
 
 # =====================
-# 📋 管理員功能 (繁體中文)
+# 📋 管理員功能 (掃描轉帳)
 # =====================
-async def pending_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
-    _, count = check_daily_limit()
-    status_msg = f"📊 <b>今日進度：{count} / {DAILY_LIMIT} (人)</b>\n\n"
-    if os.path.exists(FUEL_DB):
-        with open(FUEL_DB, "r", encoding="utf-8") as f:
-            try: data = json.load(f)
-            except: data = {}
-        p_list = [f"• <code>{k}</code>" for k, v in data.items() if v == "pending"]
-        status_msg += "📋 <b>未歸還清單：</b>\n" + ("\n".join(p_list) if p_list else "暫無紀錄")
-    await update.message.reply_text(status_msg, parse_mode="HTML")
-
 async def poll_trc20(app):
     try:
         r = requests.get(TRONGRID_URL, headers=HEADERS, params={"limit": 20}, timeout=10)
@@ -197,48 +134,55 @@ async def poll_trc20(app):
             if txid in SEEN_TX or tx.get("to") != HOT_WALLET_ADDRESS: continue
             if tx["block_timestamp"] / 1000 < START_TIME: continue
             SEEN_TX.add(txid)
+            
             usdt_amount = float(tx["value"]) / 1_000_000
             from_addr = tx["from"]
+            
+            # 檢查是否有欠款
+            is_repaying = False
+            # 從持久化數據中檢查
+            if "records" in app.bot_data and (from_addr in app.bot_data["records"] or str(from_addr) in app.bot_data["records"]):
+                is_repaying = True
+
             rate = FIXED_RATE_TRX * (1 - FEE_RATE)
             raw_trx_amount = round(usdt_amount * rate, 2)
-            is_repaying = (get_fuel_status(from_addr, "DUMMY") == "pending")
             final_pay = round(raw_trx_amount - (FUEL_AMOUNT if is_repaying else 0), 2)
             
-            auto_ok = AUTO_PAYOUT and (MIN_USDT <= usdt_amount <= MAX_USDT)
-            status_display = "🟡 <b>待人工處理</b>"
-            if auto_ok:
+            if AUTO_PAYOUT and (MIN_USDT <= usdt_amount <= MAX_USDT):
                 try:
                     txn = tron.trx.transfer(HOT_WALLET_ADDRESS, from_addr, int(final_pay * 1_000_000)).build().sign(private_key)
                     txn.broadcast()
-                    if is_repaying: update_fuel_status(from_addr, "CLEAN", None)
-                    status_display = "✅ <b>已自動出金</b>"
-                except Exception as e: status_display = f"❌ <b>失敗</b>：{str(e)}"
+                    # 清除紀錄
+                    if is_repaying and "records" in app.bot_data:
+                        app.bot_data["records"].pop(from_addr, None)
+                    status = "✅ <b>自動出金成功</b>"
+                except Exception as e: status = f"❌ <b>失敗: {e}</b>"
+            else: status = "🟡 <b>待人工處理</b>"
 
-            msg = (f"🔔 <b>USDT 入帳通知</b>\n\n"
-                   f"💰 <b>金額：</b> {usdt_amount} USDT\n"
-                   f"👤 <b>來源：</b> <code>{from_addr}</code>\n"
-                   f"⛽ <b>預支扣除：</b> {'🚩 扣除 5 TRX' if is_repaying else '無'}\n"
-                   f"💸 <b>應發總計：</b> <u>{final_pay} TRX</u>\n\n"
-                   f"📢 <b>狀態：</b> {status_display}")
+            msg = (f"🔔 <b>USDT 入帳</b>\n💰 金額: {usdt_amount} USDT\n👤 來源: <code>{from_addr}</code>\n"
+                   f"⛽ 預支扣除: {'🚩 是' if is_repaying else '否'}\n💸 應發: {final_pay} TRX\n📢 狀態: {status}")
             await app.bot.send_message(chat_id=ADMIN_ID, text=msg, parse_mode="HTML")
-    except Exception as e: print(f"Scan Error: {e}")
+    except Exception as e: print(f"Error: {e}")
 
 # =====================
-# 🚀 啟動邏輯
+# 🚀 啟動
 # =====================
 async def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    # 使用官方持久化工具
+    persistence = PicklePersistence(filepath=PERSISTENCE_FILE)
+    
+    app = ApplicationBuilder().token(BOT_TOKEN).persistence(persistence).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("usdt", usdt))
-    app.add_handler(CommandHandler("pending", pending_list))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_address_message))
+    
     await app.initialize(); await app.start(); await app.updater.start_polling()
-    print(f"🤖 Bot 已啟動 | 資料庫路徑: {BASE_DIR}")
+    print(f"🤖 GitHub Mode Bot Started")
+    
     try:
         while True:
             await poll_trc20(app); await asyncio.sleep(POLL_INTERVAL)
     finally:
-        if app.updater.running: await app.updater.stop()
         await app.stop(); await app.shutdown()
 
 SEEN_TX = set(); START_TIME = time.time(); TRONGRID_URL = f"https://api.trongrid.io/v1/accounts/{HOT_WALLET_ADDRESS}/transactions/trc20"; HEADERS = {"TRON-PRO-API-KEY": TRONGRID_API_KEY}
