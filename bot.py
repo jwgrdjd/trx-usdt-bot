@@ -1,6 +1,6 @@
 import os
-import asyncio
 import time
+import threading
 import requests
 from datetime import datetime
 
@@ -11,172 +11,216 @@ from tronpy import Tron
 from tronpy.keys import PrivateKey
 
 # =====================
-# 🔧 基本設定
+# 🔧 環境變數
 # =====================
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 TRONGRID_API_KEY = os.environ.get("TRONGRID_API_KEY")
 TRX_PRIVATE_KEY = os.environ.get("TRX_PRIVATE_KEY")
 
-ADMIN_ID = 7757022123  # 管理员 TG ID
-HOT_WALLET_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"
+if not BOT_TOKEN or not TRONGRID_API_KEY:
+    raise RuntimeError("❌ BOT_TOKEN 或 TRONGRID_API_KEY 未設定")
+
+# =====================
+# 🔒 模式開關（只改這裡）
+# =====================
+
+AUTO_PAYOUT = True   # 🔥 要真自動出金 → 改成 True,不出金改False
+NIGHT_AUTO_ONLY = True  # 夜間才自動
+
+# =====================
+# 💰 兌換參數
+# =====================
 
 FIXED_RATE_TRX = 3.2
 FEE_RATE = 0.05
-MIN_USDT = 5.0
 
-POLL_INTERVAL = 30  # 秒
-FEE_LIMIT_SUN = 10_000_000  # 10 TRX 手续费上限
+MIN_USDT = 5
+MAX_USDT = 100
 
-# =====================
-# 🔒 安全檢查
-# =====================
-
-if not BOT_TOKEN or not TRONGRID_API_KEY or not TRX_PRIVATE_KEY:
-    raise RuntimeError("❌ 缺少環境變數")
-
-if len(TRX_PRIVATE_KEY) != 64:
-    raise RuntimeError("❌ 私鑰必須是 64 位 HEX")
+# 夜間自動時間（24h）
+AUTO_START_HOUR = 0     # 00:00
+AUTO_END_HOUR = 10      # 10:00
 
 # =====================
-# 🔗 Tron 初始化（只负责出金）
+# 📌 錢包 & 管理員
+# =====================
+
+ADMIN_ID = 7757022123
+HOT_WALLET_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"
+
+# =====================
+# 🔗 Tron（只在自動出金時用）
 # =====================
 
 tron = Tron()
-private_key = PrivateKey(bytes.fromhex(TRX_PRIVATE_KEY))
-HOT_WALLET_FROM_PK = private_key.public_key.to_base58check_address()
+private_key = None
 
-print("✅ 熱錢包地址：", HOT_WALLET_FROM_PK)
-
-# =====================
-# 🧠 状态（只记 txid）
-# =====================
-
-seen_tx = set()
+if AUTO_PAYOUT:
+    if not TRX_PRIVATE_KEY or len(TRX_PRIVATE_KEY) != 64:
+        raise RuntimeError("❌ TRX_PRIVATE_KEY 必須是 64 位 HEX")
+    private_key = PrivateKey(bytes.fromhex(TRX_PRIVATE_KEY))
 
 # =====================
-# 🤖 指令
+# 🔁 鏈上監聽設定
+# =====================
+
+SEEN_TX = set()
+START_TIME = time.time()
+POLL_INTERVAL = 30
+
+TRONGRID_URL = (
+    f"https://api.trongrid.io/v1/accounts/"
+    f"{HOT_WALLET_ADDRESS}/transactions/trc20"
+)
+
+HEADERS = {
+    "TRON-PRO-API-KEY": TRONGRID_API_KEY
+}
+
+# =====================
+# 🤖 Telegram 指令
 # =====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 USDT → TRX 自动兑换机器人\n\n"
-        "/usdt 查看兑换报价\n"
-        f"最低兑换：{MIN_USDT} USDT\n"
-        "模式：自动出金"
+        "/usdt 查看兑换报价\n\n"
+        f"🔻最低：{MIN_USDT} USDT\n"
+        f"🔺最高：{MAX_USDT} USDT\n"
+        "🌐网络：TRC20"
     )
 
 async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    trx_amount = round(10 * FIXED_RATE_TRX * (1 - FEE_RATE), 2)
-    await update.message.reply_text(
-        f"💱 USDT → TRX\n\n"
-        f"USDT：10\n"
+    rate = FIXED_RATE_TRX * (1 - FEE_RATE)
+    trx_amount = round(10 * rate, 2)
+
+    text = (
+        "💱 <b>USDT → TRX 实时汇率</b>\n\n"
+        "USDT：10\n"
         f"可得：約 {trx_amount} TRX\n\n"
-        f"📥 收款地址：\n<code>{HOT_WALLET_ADDRESS}</code>",
+        "🏦 <b>TRC20 USDT 换 TRX 地址（点击复制）</b>\n"
+        f"<code>{HOT_WALLET_ADDRESS}</code>\n\n"
+        "⚠️ 请务必使用 <b>TRC20</b> 网络转账\n"
+        "转账完成后请耐心等待处理，预计 <b>3 分钟</b> 内完成闪兑"
+    )
+
+    await update.message.reply_text(
+        text=text,
         parse_mode="HTML"
     )
 
 # =====================
-# 🔁 链上监听 + 自动出金（核心）
+# 🔍 核心監聽邏輯
 # =====================
 
+def in_auto_time():
+    h = datetime.now().hour
+    return AUTO_START_HOUR <= h < AUTO_END_HOUR
+
+# =====================
+# 🧠 狀態（放在 poll_trc20 上面）
+# =====================
+seen_tx = set()
+initialized = False
+
+
 async def poll_trc20(app):
+    global initialized
+
+    print("[TRC20] polling...")
+
     url = f"https://api.trongrid.io/v1/accounts/{HOT_WALLET_ADDRESS}/transactions/trc20"
     headers = {"TRON-PRO-API-KEY": TRONGRID_API_KEY}
 
-    try:
-        r = requests.get(url, headers=headers, params={"limit": 20}, timeout=10)
-        r.raise_for_status()
-        txs = r.json().get("data", [])
+    r = requests.get(url, headers=headers, params={"limit": 20}, timeout=10)
+    r.raise_for_status()
 
+    txs = r.json().get("data", [])
+
+    # 第一次啟動：只記錄，不通知（忽略舊帳）
+    if not initialized:
         for tx in txs:
-            txid = tx.get("transaction_id")
-            if not txid or txid in seen_tx:
-                continue
+            seen_tx.add(tx["transaction_id"])
+        initialized = True
+        print("✅ TRC20 初始化完成，開始監聽新交易")
+        return
 
-            # 👉 只处理「转入」
-            to_addr = tx.get("to") or tx.get("to_address")
-            if to_addr != HOT_WALLET_ADDRESS:
-                continue
+    # 第二次之後：只處理新交易
+    for tx in txs:
+        txid = tx["transaction_id"]
+        if txid in seen_tx:
+            continue
 
-            usdt_amount = float(tx["value"]) / 1_000_000
-            if usdt_amount < MIN_USDT:
-                seen_tx.add(txid)
-                continue
+        seen_tx.add(txid)
 
-            from_addr = tx.get("from")
-            seen_tx.add(txid)
+        # 只看轉入熱錢包
+        if tx["to"] != HOT_WALLET_ADDRESS:
+            continue
 
-            trx_amount = round(usdt_amount * FIXED_RATE_TRX * (1 - FEE_RATE), 2)
+        usdt_amount = float(tx["value"]) / 1_000_000
+        from_addr = tx["from"]
 
-            # ① 管理员通知（一定先发）
+        # ✅ 一定先通知入帳
+        await app.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=(
+                "🔔 <b>USDT 入帳</b>\n\n"
+                f"金額：{usdt_amount} USDT\n"
+                f"來源：<code>{from_addr}</code>"
+            ),
+            parse_mode="HTML"
+        )
+
+        # 不符合自動出金條件就停
+        if usdt_amount < MIN_USDT:
+            continue
+
+        trx_amount = round(usdt_amount * FIXED_RATE_TRX * (1 - FEE_RATE), 2)
+
+        try:
+            tron.trx.transfer(
+                hot_wallet,
+                from_addr,
+                int(trx_amount * 1_000_000)
+            ).fee_limit(FEE_LIMIT_SUN).build().sign(private_key).broadcast()
+
             await app.bot.send_message(
                 chat_id=ADMIN_ID,
-                text=(
-                    "🔔 USDT 入账\n\n"
-                    f"金额：{usdt_amount} USDT\n"
-                    f"来源：{from_addr}\n"
-                    f"应出：{trx_amount} TRX"
-                )
+                text=f"✅ 已自动出金 {trx_amount} TRX"
             )
 
-            # ② 自动出 TRX
-            try:
-                tron.trx.transfer(
-                    HOT_WALLET_FROM_PK,
-                    from_addr,
-                    int(trx_amount * 1_000_000)
-                ).fee_limit(FEE_LIMIT_SUN).build().sign(private_key).broadcast()
+        except Exception as e:
+            await app.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=f"❌ 出金失败：{e}"
+            )
 
-                await app.bot.send_message(
-                    chat_id=ADMIN_ID,
-                    text="✅ TRX 已自动出金"
-                )
-
-            except Exception as e:
-                await app.bot.send_message(
-                    chat_id=ADMIN_ID,
-                    text=f"❌ 出金失败：{e}"
-                )
-
-    except Exception as e:
-        print("监听错误：", e)
 
 # =====================
-# 🚀 主程序（修正版）
+# 🚀 启动
 # =====================
 
-async def main():
-    # 1. 初始化 Application
+def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    # 2. 添加指令處理器
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("usdt", usdt))
 
-    # 3. 啟動機器人（異步模式）
-    await app.initialize()
-    await app.updater.start_polling()
-    await app.start()
-
-    print("🤖 Bot 已啟動（異步修正版）")
-
-    # 4. 運行你的自定義循環
-    try:
+    def loop():
         while True:
-            await poll_trc20(app)
-            await asyncio.sleep(POLL_INTERVAL)
-    except (KeyboardInterrupt, SystemExit):
-        pass
-    finally:
-        # 5. 優雅關閉
-        await app.updater.stop()
-        await app.stop()
-        await app.shutdown()
+            poll_trc20(app)
+            time.sleep(POLL_INTERVAL)
+
+    threading.Thread(target=loop, daemon=True).start()
+
+    print("🤖 Bot 已启动")
+    print("自动出金：", AUTO_PAYOUT)
+    app.run_polling()
 
 if __name__ == "__main__":
-    # 使用 asyncio 運行
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\n🛑 機器人已手動停止")
+    main()
+
+
+
+
+
