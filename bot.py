@@ -143,23 +143,40 @@ async def poll_trc20(app):
         print("监听错误：", e)
 
 # =====================
-# 🚀 主程序（最稳：不用 JobQueue）
+# 🚀 主程序（修正版）
 # =====================
 
 async def main():
+    # 1. 初始化 Application
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
+    # 2. 添加指令處理器
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("usdt", usdt))
 
-    async def loop():
+    # 3. 啟動機器人（異步模式）
+    await app.initialize()
+    await app.updater.start_polling()
+    await app.start()
+
+    print("🤖 Bot 已啟動（異步修正版）")
+
+    # 4. 運行你的自定義循環
+    try:
         while True:
             await poll_trc20(app)
             await asyncio.sleep(POLL_INTERVAL)
-
-    asyncio.create_task(loop())
-    print("🤖 Bot 已啟動（B 最終穩定版）")
-    await app.run_polling()
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    finally:
+        # 5. 優雅關閉
+        await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # 使用 asyncio 運行
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n🛑 機器人已手動停止")
