@@ -5,7 +5,7 @@ import redis
 import time
 from datetime import datetime
 
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, BotCommand
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 from tronpy import Tron
@@ -20,7 +20,7 @@ REDIS_URL = "redis://default:AY6VAAIncDFkMzVhM2FjMDgyMDA0YWI0OTBmMDI1MWViNzJhYjg
 try:
     r = redis.from_url(REDIS_URL, decode_responses=True, socket_timeout=5)
     r.ping()
-    print("✅ Upstash Redis 連線成功")
+    print("✅ Upstash Redis 連線成功 (🔋能量預支模式)")
 except Exception as e:
     r = None
     print(f"❌ Redis 連線失敗: {e}")
@@ -36,9 +36,9 @@ AUTO_PAYOUT = True
 FIXED_RATE_TRX = 3.2     
 FEE_RATE = 0.05          
 MIN_USDT = 5             
-FUEL_AMOUNT = 4          
+FUEL_AMOUNT = 4          # 預支 4 TRX
 POLL_INTERVAL = 30       
-DAILY_LIMIT = 5         
+DAILY_LIMIT = 20         
 
 ADMIN_ID = 7757022123
 HOT_WALLET_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"
@@ -73,22 +73,26 @@ def incr_daily_count():
         r.expire(f"daily:count:{today}", 86400)
 
 # =====================
-# 🎹 簡約鍵盤選單
+# 🎹 鍵盤選單樣式 (🔋能量版)
 # =====================
 def main_menu_keyboard():
-    # 只保留兩個核心按鈕，橫排並列
-    keyboard = [[KeyboardButton("✅TRX闪兑"), KeyboardButton("🆘预支TRX")]]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    keyboard = [[KeyboardButton("💎TRX闪兑"), KeyboardButton("🔋预支TRX")]]
+    return ReplyKeyboardMarkup(
+        keyboard, 
+        resize_keyboard=True, 
+        one_time_keyboard=False,
+        input_field_placeholder="点选下方功能或发送地址"
+    )
 
 # =====================
-# 🤖 客戶端指令
+# 🤖 客戶端指令邏輯
 # =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
         "🤖 <b>USDT → TRX 自动兑换系统</b>\n\n"
         "🟢 <b>欢迎使用！请点击下方选单进行操作</b>\n\n"
-        "• 点击 <b>✅TRX闪兑</b> 获取实时汇率与地址\n"
-        "• 点击 <b>🆘预支TRX</b> 领取转账手续费\n\n"
+        "• 点击 <b>💎TRX闪兑</b> 获取实时汇率与地址\n"
+        "• 点击 <b>🔋预支TRX</b> 领取转账手续费\n\n"
         f"🔴 <b>最低兑换：{MIN_USDT} USDT</b>"
     )
     await update.message.reply_text(welcome_text, parse_mode="HTML", reply_markup=main_menu_keyboard())
@@ -117,15 +121,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     username = f"@{user.username}" if user.username else f"{user.first_name}"
 
-    # 1. 處理按鈕點擊
-    if text == "✅TRX闪兑":
+    if text == "💎TRX闪兑":
         await usdt_info(update)
         return
-    elif text == "🆘预支TRX":
-        await update.message.reply_text("💡 <b>请在下方输入框直接发送您的 TRX 钱包地址</b>，系统将为您预支 4 TRX 手续费。", parse_mode="HTML")
+    elif text == "🔋预支TRX":
+        await update.message.reply_text("💡 <b>请在下方直接发送您的 TRX 钱包地址</b>，系统将为您预支 4 TRX 手续费。", parse_mode="HTML")
         return
 
-    # 2. 處理錢包地址輸入
+    # 處理地址輸入
     if len(text) == 34 and text.startswith("T"):
         if has_claimed(text, user.id):
             await update.message.reply_text("🟡 <b>提示：您或该地址已领取过预支，请完成兑换后再领。</b>", parse_mode="HTML")
@@ -135,22 +138,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         mark_as_claimed(text, user.id, username)
-
         try:
             txn = tron.trx.transfer(HOT_WALLET_ADDRESS, text, int(FUEL_AMOUNT * 1_000_000)).build().sign(private_key)
             txn.broadcast()
             incr_daily_count()
             await update.message.reply_text(f"✅ <b>预支成功！</b>\n已发送 <code>{FUEL_AMOUNT}</code> TRX 到您的地址。", parse_mode="HTML")
             
-            # 管理員通知
-            admin_msg = f"⛽ <b>【發放成功】</b>\n👤 用戶：{username}\n📥 地址：<code>{text}</code>"
+            admin_msg = f"🔋 <b>【發放成功】</b>\n👤 用戶：{username}\n📥 地址：<code>{text}</code>"
             await context.bot.send_message(chat_id=ADMIN_ID, text=admin_msg, parse_mode="HTML")
         except Exception as e:
             if r: r.delete(f"lock:addr:{text}"); r.delete(f"lock:user:{user.id}"); r.delete(f"who:{text}")
             await update.message.reply_text(f"❌ 发放失败: {e}", parse_mode="HTML")
 
 # =====================
-# 📋 掃描與自動回款
+# 📋 掃描邏輯
 # =====================
 async def poll_trc20(app):
     try:
@@ -168,7 +169,6 @@ async def poll_trc20(app):
             from_addr = tx["from"]
             who_claimed = r.get(f"who:{from_addr}") if r else None
             is_repaying = True if who_claimed else False
-            
             rate = FIXED_RATE_TRX * (1 - FEE_RATE)
             final_pay = round((val * rate) - (FUEL_AMOUNT if is_repaying else 0), 2)
             
@@ -190,10 +190,21 @@ async def poll_trc20(app):
 # =====================
 async def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
+    
+    # 設定左側選單快捷鍵
+    commands = [
+        BotCommand("start", "🏠 刷新选单"),
+        BotCommand("usdt", "💱 获取汇率与地址"),
+        BotCommand("help", "🔋 预支 TRX 手续费")
+    ]
+    await app.bot.set_my_commands(commands)
+
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("usdt", lambda u, c: usdt_info(u)))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+    
     await app.initialize(); await app.start(); await app.updater.start_polling()
-    print("🤖 機器人運行中 (簡約選單版)")
+    print("🤖 機器人已啟動 (🔋能量版)")
     while True: await poll_trc20(app); await asyncio.sleep(POLL_INTERVAL)
 
 SEEN_TX = set(); START_TIME = time.time()
