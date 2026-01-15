@@ -109,7 +109,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /usdt － 获取实时汇率与收款地址\n"
         "• <b>直接发送钱包地址</b> － 预支 5 TRX 手续费\n\n"
         f"💡 <i>预支说明：若您的钱包TRX余额不足，直接发送地址可预支 {FUEL_AMOUNT} TRX 手续费。此款项将于您完成兑换时自动扣除。</i>\n\n"
-        f"🔻 最低兑换：{MIN_USDT} USDT"
+        f"🔻 USDT → TRX 最低兌換：{MIN_USDT} USDT"
     )
     await update.message.reply_text(welcome_text, parse_mode="HTML")
 
@@ -124,6 +124,7 @@ async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "--------------------------\n"
         "💡 <b>温馨提示：</b>\n"
         "若您的钱包 TRX 余额不足无法进行兑換，请直接在此<b>发送您的 TRX 钱包地址</b>，系统将为您预支 5 TRX 手续费。"
+        f"🔻 USDT → TRX 最低兌換：{MIN_USDT} USDT"
     )
     await update.message.reply_text(text, parse_mode="HTML")
 
@@ -248,3 +249,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("停止機器人")
+
