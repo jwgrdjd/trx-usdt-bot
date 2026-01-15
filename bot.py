@@ -13,7 +13,7 @@ from tronpy.keys import PrivateKey
 from tronpy.providers import HTTPProvider
 
 # =====================
-# 🗄️ Redis 雲端資料庫連線 (解決更新重置問題)
+# 🗄️ Redis 雲端資料庫連線
 # =====================
 REDIS_URL = "redis://default:AY6VAAIncDFkMzVhM2FjMDgyMDA0YWI0OTBmMDI1MWViNzJhYjg5OXAxMzY1MDE@promoted-condor-36501.upstash.io:6379"
 
@@ -75,7 +75,7 @@ def incr_daily_count():
 def remove_claim(address, user_id):
     if r:
         r.delete(f"claimed_addr:{address}")
-        r.delete(f"user:{user_id}")
+        r.delete(f"claimed_user:{user_id}")
 
 # =====================
 # 🤖 客戶端指令 (簡體中文)
@@ -93,10 +93,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rate = round(FIXED_RATE_TRX * (1 - FEE_RATE), 2)
-    trx_amount = round(10 * FIXED_RATE_TRX * (1 - FEE_RATE), 2)
+    trx_amount = round(10 * rate, 2)
     text = (
         "💱 <b>USDT → TRX 实时汇率</b>\n\n"
-        "<b>当前汇率：</b> 1 USDT = <code>" + str(round(FIXED_RATE_TRX * (1-FEE_RATE), 2)) + "</code> TRX\n"
+        f"<b>当前汇率：</b> 1 USDT = <code>{rate}</code> TRX\n"
         f"<b>参考兑换：</b> 10 USDT ≈ <code>{trx_amount}</code> TRX\n\n"
         "📥 <b>TRC20 收款地址 (点击可复制)</b>\n"
         f"<code>{HOT_WALLET_ADDRESS}</code>\n\n"
@@ -112,7 +112,6 @@ async def handle_address_message(update: Update, context: ContextTypes.DEFAULT_T
     user = update.effective_user
     
     if len(text) == 34 and text.startswith("T"):
-        # 1. 向 Redis 查詢 (簡體回覆客人)
         if has_claimed(text, user.id):
             await update.message.reply_text("🟡 <b>提示：您已领取过预支 TRX，请完成兑换后再领。</b>", parse_mode="HTML")
             return
@@ -121,19 +120,15 @@ async def handle_address_message(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("🔴 <b>今日预支名额已满，请明天再试。</b>", parse_mode="HTML")
             return
 
-        # 鎖定紀錄
         mark_as_claimed(text, user.id)
 
         try:
-            # 2. 執行發送
             txn = tron.trx.transfer(HOT_WALLET_ADDRESS, text, int(FUEL_AMOUNT * 1_000_000)).build().sign(private_key)
             txn.broadcast()
             
             incr_daily_count()
-            # 簡體通知客人
             await update.message.reply_text(f"✅ <b>预支TRX发放成功！</b>\n\n已向您的地址发送 <code>{FUEL_AMOUNT}</code> TRX。", parse_mode="HTML")
             
-            # 繁體通知管理員
             admin_notice = (
                 "⛽ <b>【發放通知】</b>\n\n"
                 f"👤 <b>用戶 ID：</b> <code>{user.id}</code>\n"
@@ -165,7 +160,6 @@ async def poll_trc20(app):
             val = float(tx["value"]) / 1_000_000
             from_addr = tx["from"]
             
-            # 檢查是否有預支紀錄
             is_repaying = False
             if r and r.exists(f"claimed_addr:{from_addr}"):
                 is_repaying = True
@@ -183,7 +177,40 @@ async def poll_trc20(app):
                 except Exception as e: status = f"❌ <b>失敗: {e}</b>"
             else: status = "🟡 <b>待人工處理</b>"
 
-            # 繁體通知管理員
-            msg = (f"🔔 <b>【USDT 入帳通知】</b>\n\n"
-                   f"💰 金額: <code>{val}</code> USDT\n"
-                   f"👤 來源:
+            msg = (
+                f"🔔 <b>【USDT 入帳通知】</b>\n\n"
+                f"💰 金額: <code>{val}</code> USDT\n"
+                f"👤 來源: <code>{from_addr}</code>\n"
+                f"⛽ 扣除預支: {'🚩 是' if is_repaying else '否'}\n"
+                f"💸 實發金額: <b>{final_pay} TRX</b>\n"
+                f"📢 狀態: {status}"
+            )
+            await app.bot.send_message(chat_id=ADMIN_ID, text=msg, parse_mode="HTML")
+    except Exception as e: 
+        print(f"Scan Error: {e}")
+
+# =====================
+# 🚀 啟動
+# =====================
+async def main():
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("usdt", usdt))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_address_message))
+    
+    await app.initialize(); await app.start(); await app.updater.start_polling()
+    print("🤖 機器人已啟動 (Redis 繁簡模式)")
+    
+    try:
+        while True:
+            await poll_trc20(app)
+            await asyncio.sleep(POLL_INTERVAL)
+    finally:
+        await app.stop(); await app.shutdown()
+
+SEEN_TX = set(); START_TIME = time.time()
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Stopped")
