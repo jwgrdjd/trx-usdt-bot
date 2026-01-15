@@ -20,7 +20,7 @@ REDIS_URL = "redis://default:AY6VAAIncDFkMzVhM2FjMDgyMDA0YWI0OTBmMDI1MWViNzJhYjg
 try:
     r = redis.from_url(REDIS_URL, decode_responses=True, socket_timeout=5)
     r.ping()
-    print("✅ Upstash Redis 連線成功，已開啟永久鎖定模式")
+    print("✅ Upstash Redis 連線成功，已開啟永久鎖定模式 (預支 4 TRX)")
 except Exception as e:
     r = None
     print(f"❌ Redis 連線失敗: {e}")
@@ -37,9 +37,9 @@ FIXED_RATE_TRX = 3.2
 FEE_RATE = 0.05          
 MIN_USDT = 5             
 MAX_USDT = 100           
-FUEL_AMOUNT = 5          
+FUEL_AMOUNT = 4          # 已修改為 4 TRX
 POLL_INTERVAL = 30       
-DAILY_LIMIT = 5         
+DAILY_LIMIT = 20         
 
 ADMIN_ID = 7757022123
 HOT_WALLET_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"
@@ -55,12 +55,10 @@ def has_claimed(address, user_id):
     if not r: 
         print("🚨 資料庫未連線，為防止刷錢，暫停預支發放")
         return True 
-    # 檢查雲端是否存在紀錄
     return r.exists(f"lock:addr:{address}") or r.exists(f"lock:user:{user_id}")
 
 def mark_as_claimed(address, user_id):
     if r:
-        # 不設 ex 參數，紀錄將永久保存，直到用戶完成兌換被系統自動刪除
         r.set(f"lock:addr:{address}", "claimed")
         r.set(f"lock:user:{user_id}", "claimed")
         print(f"🔒 已永久鎖定領取紀錄：{address}")
@@ -75,7 +73,6 @@ def incr_daily_count():
     if r:
         today = datetime.now().strftime("%Y-%m-%d")
         r.incr(f"daily:count:{today}")
-        # 每日限額在 24 小時後重置
         r.expire(f"daily:count:{today}", 86400)
 
 # =====================
@@ -86,7 +83,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🤖 <b>USDT → TRX 自动兑换系统</b>\n\n"
         "🔵 <b>快速操作：</b>\n"
         "• /usdt － 获取实时汇率与收款地址\n"
-        "• <b>直接发送钱包地址</b> － 预支 5 TRX 手续费\n\n"
+        "• <b>直接发送钱包地址</b> － 预支 4 TRX 手续费\n\n"
         f"💡 <i>温馨提示：若您的钱包 TRX 余额不足无法转账，请在此直接发送您的 TRX 钱包地址，系统将为您预支 {FUEL_AMOUNT} TRX 手续费。</i>\n\n"
         f"🔴 <b>USDT → TRX 最低兑换：{MIN_USDT} USDT</b>"
     )
@@ -104,7 +101,7 @@ async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "--------------------------\n"
         "⚠️ <b>温馨提示：</b>\n"
         "转账完成后请耐心等待处理，预计 3 分钟内完成闪兑\n"
-        "若您的钱包 TRX 余额不足无法转账，请在此直接<b>发送您的 TRX 钱包地址</b>，系统将为您预支 5 TRX 手续费。"
+        "若您的钱包 TRX 余额不足无法转账，请在此直接<b>发送您的 TRX 钱包地址</b>，系统将为您预支 4 TRX 手续费。"
     )
     await update.message.reply_text(text, parse_mode="HTML")
 
@@ -121,17 +118,16 @@ async def handle_address_message(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("🔴 <b>今日预支名额已满，请明天再试。</b>", parse_mode="HTML")
             return
 
-        # 鎖定紀錄
         mark_as_claimed(text, user.id)
 
         try:
+            # 發放金額已改為 4 TRX
             txn = tron.trx.transfer(HOT_WALLET_ADDRESS, text, int(FUEL_AMOUNT * 1_000_000)).build().sign(private_key)
             txn.broadcast()
             incr_daily_count()
             await update.message.reply_text(f"✅ <b>预支TRX发放成功！</b>\n\n已向您的地址发送 <code>{FUEL_AMOUNT}</code> TRX。", parse_mode="HTML")
             
-            # 繁體通知管理員
-            admin_msg = f"⛽ <b>【發放成功】</b>\n地址：<code>{text}</code>\n今日進度：{get_daily_count()}/{DAILY_LIMIT}"
+            admin_msg = f"⛽ <b>【發放成功 (4 TRX)】</b>\n地址：<code>{text}</code>\n今日進度：{get_daily_count()}/{DAILY_LIMIT}"
             await context.bot.send_message(chat_id=ADMIN_ID, text=admin_msg, parse_mode="HTML")
         except Exception as e:
             if r: 
@@ -158,24 +154,23 @@ async def poll_trc20(app):
             val = float(tx["value"]) / 1_000_000
             from_addr = tx["from"]
             
-            # 判斷是否欠著預支
             is_repaying = r.exists(f"lock:addr:{from_addr}") if r else False
             rate = FIXED_RATE_TRX * (1 - FEE_RATE)
             raw_trx = round(val * rate, 2)
+            # 這裡會根據 FUEL_AMOUNT (4) 自動扣除
             final_pay = round(raw_trx - (FUEL_AMOUNT if is_repaying else 0), 2)
             
             if val >= MIN_USDT and AUTO_PAYOUT:
                 try:
                     txn = tron.trx.transfer(HOT_WALLET_ADDRESS, from_addr, int(final_pay * 1_000_000)).build().sign(private_key)
                     txn.broadcast()
-                    # 兌換成功後，自動從雲端刪除鎖定紀錄
                     if r: r.delete(f"lock:addr:{from_addr}")
                     status = "✅ 自動出金成功"
                 except Exception as e: status = f"❌ 失敗: {e}"
             else: status = "🟡 待處理"
 
             msg = (f"🔔 <b>【USDT 入帳】</b>\n金額: {val} USDT\n來源: <code>{from_addr}</code>\n"
-                   f"扣除預支: {'是' if is_repaying else '否'}\n實發: {final_pay} TRX\n狀態: {status}")
+                   f"扣除預支: {'是 (4 TRX)' if is_repaying else '否'}\n實發: {final_pay} TRX\n狀態: {status}")
             await app.bot.send_message(chat_id=ADMIN_ID, text=msg, parse_mode="HTML")
     except Exception as e: print(f"Scan Error: {e}")
 
@@ -189,7 +184,7 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_address_message))
     
     await app.initialize(); await app.start(); await app.updater.start_polling()
-    print("🤖 機器人已在永久雲端鎖定模式下啟動")
+    print("🤖 機器人已在 4 TRX 永久鎖定模式下啟動")
     
     while True: 
         await poll_trc20(app)
@@ -197,8 +192,5 @@ async def main():
 
 SEEN_TX = set(); START_TIME = time.time()
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("Stopped")
-
+    try: asyncio.run(main())
+    except KeyboardInterrupt: print("Stopped")
