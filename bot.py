@@ -13,9 +13,9 @@ from tronpy.keys import PrivateKey
 from tronpy.providers import HTTPProvider
 
 # =====================
-# 📁 數據持久化路徑 (絕對路徑鎖定)
+# 📁 數據持久化路徑 (絕對路徑加固)
 # =====================
-# 確保無論從哪裡啟動，都會讀取腳本所在資料夾的資料庫
+# 獲取目前程式碼所在的絕對資料夾路徑，確保更新時紀錄不丟失
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FUEL_DB = os.path.join(BASE_DIR, "fuel_status.json")
 STATS_DB = os.path.join(BASE_DIR, "daily_stats.json")
@@ -47,51 +47,58 @@ tron = Tron(provider)
 private_key = PrivateKey(bytes.fromhex(TRX_PRIVATE_KEY)) if AUTO_PAYOUT else None
 
 # =====================
-# 💾 數據庫管理函數
+# 💾 安全數據庫操作
 # =====================
+def get_fuel_status(address, user_id):
+    if not os.path.exists(FUEL_DB): return None
+    try:
+        with open(FUEL_DB, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if data.get(address) == "pending" or data.get(str(user_id)) == "pending":
+                return "pending"
+    except: pass
+    return None
+
+def update_fuel_status(address, user_id, status):
+    data = {}
+    if os.path.exists(FUEL_DB):
+        try:
+            with open(FUEL_DB, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except: data = {}
+    
+    if status is None:
+        data.pop(address, None)
+        data.pop(str(user_id), None)
+    else:
+        data[address] = status
+        data[str(user_id)] = status
+        
+    with open(FUEL_DB, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
 def check_daily_limit():
     today = datetime.now().strftime("%Y-%m-%d")
     data = {"date": today, "count": 0}
     if os.path.exists(STATS_DB):
-        with open(STATS_DB, "r") as f:
-            try:
+        try:
+            with open(STATS_DB, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if data.get("date") != today: data = {"date": today, "count": 0}
-            except: pass
-    if data["count"] >= DAILY_LIMIT: return False, data["count"]
-    return True, data["count"]
+        except: pass
+    return (data["count"] < DAILY_LIMIT), data["count"]
 
 def increment_daily_count():
     today = datetime.now().strftime("%Y-%m-%d")
     data = {"date": today, "count": 0}
     if os.path.exists(STATS_DB):
-        with open(STATS_DB, "r") as f:
-            try: data = json.load(f)
-            except: pass
-    data["count"] += 1
-    with open(STATS_DB, "w") as f: json.dump(data, f)
-
-def get_fuel_status(address, user_id):
-    if not os.path.exists(FUEL_DB): return None
-    with open(FUEL_DB, "r") as f:
         try:
-            data = json.load(f)
-            # 同時檢查地址與 ID 紀錄
-            if data.get(address) == "pending" or data.get(str(user_id)) == "pending": return "pending"
-            return None
-        except: return None
-
-def update_fuel_status(address, user_id, status):
-    data = {}
-    if os.path.exists(FUEL_DB):
-        with open(FUEL_DB, "r") as f:
-            try: data = json.load(f)
-            except: data = {}
-    if status is None:
-        data.pop(address, None); data.pop(str(user_id), None)
-    else:
-        data[address] = status; data[str(user_id)] = status
-    with open(FUEL_DB, "w") as f: json.dump(data, f)
+            with open(STATS_DB, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except: pass
+    data["count"] += 1
+    with open(STATS_DB, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
 
 # =====================
 # 🤖 客戶端指令 (簡體中文)
@@ -126,26 +133,31 @@ async def handle_address_message(update: Update, context: ContextTypes.DEFAULT_T
     text = update.message.text.strip()
     user = update.effective_user
     if len(text) == 34 and text.startswith("T"):
+        # 1. 檢查每日限額
         can_loan, current_count = check_daily_limit()
         if not can_loan:
             await update.message.reply_text("🔴 <b>今日预支名额已满，请明天再试。</b>", parse_mode="HTML")
             return
+            
+        # 2. 檢查是否領取過 (雙重判定)
         if get_fuel_status(text, user.id) == "pending":
             await update.message.reply_text("🟡 <b>提示：您已领取过预支 TRX，请完成兑换后再领。</b>", parse_mode="HTML")
             return
+
+        # 🔥【先鎖定】: 在發送前就寫入資料庫，防止重複觸發
+        update_fuel_status(text, user.id, "pending")
+
         try:
-            # 發送 5 TRX
+            # 3. 執行轉帳
             txn = tron.trx.transfer(HOT_WALLET_ADDRESS, text, int(FUEL_AMOUNT * 1_000_000)).build().sign(private_key)
             txn.broadcast()
             
-            # 更新數據庫 (絕對路徑操作)
-            update_fuel_status(text, user.id, "pending")
+            # 4. 更新每日計數
             increment_daily_count()
             
-            # 回覆用戶
+            # 5. 回覆與通知管理員
             await update.message.reply_text(f"✅ <b>预支TRX发放成功！</b>\n\n已向您的地址发送 <code>{FUEL_AMOUNT}</code> TRX。该款项将在您兑换成功时自动扣回。", parse_mode="HTML")
             
-            # 通知管理員
             admin_notice = (
                 "⛽ <b>預支發放通知</b>\n\n"
                 f"👤 <b>用戶 ID：</b> <code>{user.id}</code>\n"
@@ -156,8 +168,10 @@ async def handle_address_message(update: Update, context: ContextTypes.DEFAULT_T
             await context.bot.send_message(chat_id=ADMIN_ID, text=admin_notice, parse_mode="HTML")
 
         except Exception as e:
+            # 如果轉帳失敗，才解除鎖定
+            update_fuel_status(text, user.id, None)
             await update.message.reply_text("❌ <b>发放失败，请联系客服处理。</b>", parse_mode="HTML")
-            await context.bot.send_message(chat_id=ADMIN_ID, text=f"❌ <b>預支發放錯誤通知：</b>\n{str(e)}")
+            await context.bot.send_message(chat_id=ADMIN_ID, text=f"❌ <b>預支發放錯誤：</b>\n{str(e)}")
 
 # =====================
 # 📋 管理員功能 (繁體中文)
@@ -167,7 +181,7 @@ async def pending_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _, count = check_daily_limit()
     status_msg = f"📊 <b>今日進度：{count} / {DAILY_LIMIT} (人)</b>\n\n"
     if os.path.exists(FUEL_DB):
-        with open(FUEL_DB, "r") as f:
+        with open(FUEL_DB, "r", encoding="utf-8") as f:
             try: data = json.load(f)
             except: data = {}
         p_list = [f"• <code>{k}</code>" for k, v in data.items() if v == "pending"]
@@ -207,10 +221,10 @@ async def poll_trc20(app):
                    f"💸 <b>應發總計：</b> <u>{final_pay} TRX</u>\n\n"
                    f"📢 <b>狀態：</b> {status_display}")
             await app.bot.send_message(chat_id=ADMIN_ID, text=msg, parse_mode="HTML")
-    except Exception as e: print(f"Error: {e}")
+    except Exception as e: print(f"Scan Error: {e}")
 
 # =====================
-# 🚀 執行
+# 🚀 啟動邏輯
 # =====================
 async def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -218,10 +232,8 @@ async def main():
     app.add_handler(CommandHandler("usdt", usdt))
     app.add_handler(CommandHandler("pending", pending_list))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_address_message))
-    
     await app.initialize(); await app.start(); await app.updater.start_polling()
-    print(f"🤖 Bot 已啟動 | 資料夾: {BASE_DIR}")
-    
+    print(f"🤖 Bot 已啟動 | 資料庫路徑: {BASE_DIR}")
     try:
         while True:
             await poll_trc20(app); await asyncio.sleep(POLL_INTERVAL)
