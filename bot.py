@@ -13,17 +13,18 @@ from tronpy.keys import PrivateKey
 from tronpy.providers import HTTPProvider
 
 # =====================
-# 🗄️ Redis 雲端資料庫連線
+# 🗄️ Redis 雲端資料庫連線 (解決更新重置問題)
 # =====================
+# 已更換為您截圖中顯示的新 Token
 REDIS_URL = "redis://default:AY6VAAIncDFkMzVhM2FjMDgyMDA0YWI0OTBmMDI1MWViNzJhYjg5OXAxMzY1MDE@promoted-condor-36501.upstash.io:6379"
 
 try:
-    r = redis.from_url(REDIS_URL, decode_responses=True)
+    r = redis.from_url(REDIS_URL, decode_responses=True, socket_timeout=5)
     r.ping()
     print("✅ 成功連線到 Upstash Redis 雲端資料庫")
 except Exception as e:
     r = None
-    print(f"❌ Redis 連線失敗: {e}")
+    print(f"❌ 嚴重錯誤：Redis 連線失敗！紀錄將無法持久保存: {e}")
 
 # =====================
 # 🔧 核心參數設定
@@ -39,7 +40,7 @@ MIN_USDT = 5
 MAX_USDT = 100           
 FUEL_AMOUNT = 5          
 POLL_INTERVAL = 30       
-DAILY_LIMIT = 5         
+DAILY_LIMIT = 20         
 
 ADMIN_ID = 7757022123
 HOT_WALLET_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"
@@ -52,13 +53,20 @@ private_key = PrivateKey(bytes.fromhex(TRX_PRIVATE_KEY)) if AUTO_PAYOUT else Non
 # 💾 Redis 數據存取邏輯
 # =====================
 def has_claimed(address, user_id):
-    if not r: return False
-    return r.exists(f"claimed_addr:{address}") or r.exists(f"claimed_user:{user_id}")
+    if not r: 
+        print("⚠️ 警告：Redis 未連線，無法查詢紀錄，可能導致重複領取")
+        return False
+    # 確保查詢的標籤與寫入的標籤一致
+    addr_exists = r.exists(f"claimed_addr:{address}")
+    user_exists = r.exists(f"claimed_user:{user_id}")
+    return addr_exists or user_exists
 
 def mark_as_claimed(address, user_id):
     if r:
-        r.set(f"claimed_addr:{address}", "pending")
-        r.set(f"claimed_user:{user_id}", "pending")
+        # 將紀錄寫入雲端，設定 10 萬秒過期（約 28 小時）
+        r.set(f"claimed_addr:{address}", "claimed", ex=100000)
+        r.set(f"claimed_user:{user_id}", "claimed", ex=100000)
+        print(f"💾 紀錄已鎖定：{address}")
 
 def get_daily_count():
     if not r: return 0
@@ -112,6 +120,7 @@ async def handle_address_message(update: Update, context: ContextTypes.DEFAULT_T
     user = update.effective_user
     
     if len(text) == 34 and text.startswith("T"):
+        # 1. 向雲端 Redis 查詢
         if has_claimed(text, user.id):
             await update.message.reply_text("🟡 <b>提示：您已领取过预支 TRX，请完成兑换后再领。</b>", parse_mode="HTML")
             return
@@ -120,15 +129,18 @@ async def handle_address_message(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("🔴 <b>今日预支名额已满，请明天再试。</b>", parse_mode="HTML")
             return
 
+        # 鎖定紀錄至雲端
         mark_as_claimed(text, user.id)
 
         try:
+            # 2. 執行發送
             txn = tron.trx.transfer(HOT_WALLET_ADDRESS, text, int(FUEL_AMOUNT * 1_000_000)).build().sign(private_key)
             txn.broadcast()
             
             incr_daily_count()
             await update.message.reply_text(f"✅ <b>预支TRX发放成功！</b>\n\n已向您的地址发送 <code>{FUEL_AMOUNT}</code> TRX。", parse_mode="HTML")
             
+            # 繁體通知管理員
             admin_notice = (
                 "⛽ <b>【發放通知】</b>\n\n"
                 f"👤 <b>用戶 ID：</b> <code>{user.id}</code>\n"
@@ -138,8 +150,9 @@ async def handle_address_message(update: Update, context: ContextTypes.DEFAULT_T
             await context.bot.send_message(chat_id=ADMIN_ID, text=admin_notice, parse_mode="HTML")
 
         except Exception as e:
+            # 失敗則清除雲端紀錄，允許重試
             remove_claim(text, user.id)
-            await update.message.reply_text("❌ <b>发放失败，请联系客服处理。</b>", parse_mode="HTML")
+            await update.message.reply_text(f"❌ <b>发放失败：{e}</b>", parse_mode="HTML")
 
 # =====================
 # 📋 管理員通知邏輯 (繁體中文)
@@ -198,15 +211,18 @@ async def main():
     app.add_handler(CommandHandler("usdt", usdt))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_address_message))
     
-    await app.initialize(); await app.start(); await app.updater.start_polling()
-    print("🤖 機器人已啟動 (Redis 繁簡模式)")
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
+    print("🤖 機器人已在 Redis 持久化模式下啟動")
     
     try:
         while True:
             await poll_trc20(app)
             await asyncio.sleep(POLL_INTERVAL)
     finally:
-        await app.stop(); await app.shutdown()
+        await app.stop()
+        await app.shutdown()
 
 SEEN_TX = set(); START_TIME = time.time()
 if __name__ == "__main__":
@@ -214,4 +230,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Stopped")
-
