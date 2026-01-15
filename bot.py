@@ -13,13 +13,13 @@ from tronpy.keys import PrivateKey
 from tronpy.providers import HTTPProvider
 
 # =====================
-# 🔧 环境变量与核心设置
+# 🔧 環境變數與核心設定
 # =====================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 TRONGRID_API_KEY = os.environ.get("TRONGRID_API_KEY")
 TRX_PRIVATE_KEY = os.environ.get("TRX_PRIVATE_KEY")
 
-# 业务参数
+# 業務參數
 AUTO_PAYOUT = True       
 FIXED_RATE_TRX = 3.2     
 FEE_RATE = 0.05          
@@ -27,7 +27,7 @@ MIN_USDT = 5
 MAX_USDT = 100           
 FUEL_AMOUNT = 5          
 POLL_INTERVAL = 30       
-DAILY_LIMIT = 20         # 随时可手动修改此数字
+DAILY_LIMIT = 20         
 
 ADMIN_ID = 7757022123
 HOT_WALLET_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"
@@ -42,7 +42,7 @@ tron = Tron(provider)
 private_key = PrivateKey(bytes.fromhex(TRX_PRIVATE_KEY)) if AUTO_PAYOUT else None
 
 # =====================
-# 💾 数据库管理
+# 💾 數據存儲邏輯
 # =====================
 def check_daily_limit():
     today = datetime.now().strftime("%Y-%m-%d")
@@ -88,7 +88,7 @@ def update_fuel_status(address, user_id, status):
     with open(FUEL_DB, "w") as f: json.dump(data, f)
 
 # =====================
-# 🤖 客户端指令 (简体中文)
+# 🤖 客戶端指令 (簡體中文)
 # =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
@@ -118,26 +118,44 @@ async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_address_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-    user_id = update.effective_user.id
+    user = update.effective_user
     if len(text) == 34 and text.startswith("T"):
-        can_loan, _ = check_daily_limit()
+        can_loan, current_count = check_daily_limit()
         if not can_loan:
             await update.message.reply_text("🔴 <b>今日预支名额已满，请明天再试。</b>", parse_mode="HTML")
             return
-        if get_fuel_status(text, user_id) == "pending":
+        if get_fuel_status(text, user.id) == "pending":
             await update.message.reply_text("🟡 <b>提示：您已领取过预支 TRX，请完成兑换后再领。</b>", parse_mode="HTML")
             return
         try:
+            # 執行轉帳
             txn = tron.trx.transfer(HOT_WALLET_ADDRESS, text, int(FUEL_AMOUNT * 1_000_000)).build().sign(private_key)
             txn.broadcast()
-            update_fuel_status(text, user_id, "pending")
+            
+            # 更新數據庫
+            update_fuel_status(text, user.id, "pending")
             increment_daily_count()
+            
+            # 1. 回覆用戶 (簡體)
             await update.message.reply_text(f"✅ <b>预支TRX发放成功！</b>\n\n已向您的地址发送 <code>{FUEL_AMOUNT}</code> TRX。该款项将在您兑换成功时自动扣回。", parse_mode="HTML")
-        except Exception:
+            
+            # 2. ✨ 通知管理員 (繁體)
+            admin_notice = (
+                "⛽ <b>預支發放通知</b>\n\n"
+                f"👤 <b>用戶 ID：</b> <code>{user.id}</code>\n"
+                f"👤 <b>用戶名：</b> @{user.username if user.username else '無'}\n"
+                f"📥 <b>錢包地址：</b> <code>{text}</code>\n"
+                f"💰 <b>金額：</b> {FUEL_AMOUNT} TRX\n"
+                f"📊 <b>今日進度：</b> {current_count + 1} / {DAILY_LIMIT}"
+            )
+            await context.bot.send_message(chat_id=ADMIN_ID, text=admin_notice, parse_mode="HTML")
+
+        except Exception as e:
             await update.message.reply_text("❌ <b>发放失败，请联系客服处理。</b>", parse_mode="HTML")
+            await context.bot.send_message(chat_id=ADMIN_ID, text=f"❌ <b>預支發放錯誤：</b>\n{str(e)}")
 
 # =====================
-# 📋 管理员功能 (繁体中文)
+# 📋 管理員功能 (繁體中文)
 # =====================
 async def pending_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
@@ -184,10 +202,10 @@ async def poll_trc20(app):
                    f"💸 <b>應發總計：</b> <u>{final_pay} TRX</u>\n\n"
                    f"📢 <b>狀態：</b> {status_display}")
             await app.bot.send_message(chat_id=ADMIN_ID, text=msg, parse_mode="HTML")
-    except Exception as e: print(f"Error: {e}")
+    except Exception as e: print(f"Scan Error: {e}")
 
 # =====================
-# 🚀 启动
+# 🚀 啟動邏輯
 # =====================
 async def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
