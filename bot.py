@@ -13,18 +13,17 @@ from tronpy.keys import PrivateKey
 from tronpy.providers import HTTPProvider
 
 # =====================
-# 🗄️ Redis 雲端資料庫連線 (解決更新重置問題)
+# 🗄️ Redis 雲端資料庫連線 (永久鎖定紀錄)
 # =====================
-# 已更換為您截圖中顯示的新 Token
 REDIS_URL = "redis://default:AY6VAAIncDFkMzVhM2FjMDgyMDA0YWI0OTBmMDI1MWViNzJhYjg5OXAxMzY1MDE@promoted-condor-36501.upstash.io:6379"
 
 try:
     r = redis.from_url(REDIS_URL, decode_responses=True, socket_timeout=5)
     r.ping()
-    print("✅ 成功連線到 Upstash Redis 雲端資料庫")
+    print("✅ Upstash Redis 連線成功，已開啟永久鎖定模式")
 except Exception as e:
     r = None
-    print(f"❌ 嚴重錯誤：Redis 連線失敗！紀錄將無法持久保存: {e}")
+    print(f"❌ Redis 連線失敗: {e}")
 
 # =====================
 # 🔧 核心參數設定
@@ -47,46 +46,40 @@ HOT_WALLET_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"
 
 provider = HTTPProvider(api_key=TRONGRID_API_KEY)
 tron = Tron(provider)
-private_key = PrivateKey(bytes.fromhex(TRX_PRIVATE_KEY)) if AUTO_PAYOUT else None
+private_key = PrivateKey(bytes.fromhex(TRX_PRIVATE_KEY)) if TRX_PRIVATE_KEY else None
 
 # =====================
-# 💾 Redis 數據存取邏輯
+# 💾 數據存取邏輯 (永久存儲)
 # =====================
 def has_claimed(address, user_id):
     if not r: 
-        print("⚠️ 警告：Redis 未連線，無法查詢紀錄，可能導致重複領取")
-        return False
-    # 確保查詢的標籤與寫入的標籤一致
-    addr_exists = r.exists(f"claimed_addr:{address}")
-    user_exists = r.exists(f"claimed_user:{user_id}")
-    return addr_exists or user_exists
+        print("🚨 資料庫未連線，為防止刷錢，暫停預支發放")
+        return True 
+    # 檢查雲端是否存在紀錄
+    return r.exists(f"lock:addr:{address}") or r.exists(f"lock:user:{user_id}")
 
 def mark_as_claimed(address, user_id):
     if r:
-        # 將紀錄寫入雲端，設定 10 萬秒過期（約 28 小時）
-        r.set(f"claimed_addr:{address}", "claimed", ex=100000)
-        r.set(f"claimed_user:{user_id}", "claimed", ex=100000)
-        print(f"💾 紀錄已鎖定：{address}")
+        # 不設 ex 參數，紀錄將永久保存，直到用戶完成兌換被系統自動刪除
+        r.set(f"lock:addr:{address}", "claimed")
+        r.set(f"lock:user:{user_id}", "claimed")
+        print(f"🔒 已永久鎖定領取紀錄：{address}")
 
 def get_daily_count():
     if not r: return 0
     today = datetime.now().strftime("%Y-%m-%d")
-    count = r.get(f"daily_count:{today}")
+    count = r.get(f"daily:count:{today}")
     return int(count) if count else 0
 
 def incr_daily_count():
     if r:
         today = datetime.now().strftime("%Y-%m-%d")
-        r.incr(f"daily_count:{today}")
-        r.expire(f"daily_count:{today}", 100000)
-
-def remove_claim(address, user_id):
-    if r:
-        r.delete(f"claimed_addr:{address}")
-        r.delete(f"claimed_user:{user_id}")
+        r.incr(f"daily:count:{today}")
+        # 每日限額在 24 小時後重置
+        r.expire(f"daily:count:{today}", 86400)
 
 # =====================
-# 🤖 客戶端指令 (簡體中文)
+# 🤖 客戶端指令 (繁簡分流：客戶端簡體)
 # =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
@@ -120,7 +113,6 @@ async def handle_address_message(update: Update, context: ContextTypes.DEFAULT_T
     user = update.effective_user
     
     if len(text) == 34 and text.startswith("T"):
-        # 1. 向雲端 Redis 查詢
         if has_claimed(text, user.id):
             await update.message.reply_text("🟡 <b>提示：您已领取过预支 TRX，请完成兑换后再领。</b>", parse_mode="HTML")
             return
@@ -129,33 +121,26 @@ async def handle_address_message(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("🔴 <b>今日预支名额已满，请明天再试。</b>", parse_mode="HTML")
             return
 
-        # 鎖定紀錄至雲端
+        # 鎖定紀錄
         mark_as_claimed(text, user.id)
 
         try:
-            # 2. 執行發送
             txn = tron.trx.transfer(HOT_WALLET_ADDRESS, text, int(FUEL_AMOUNT * 1_000_000)).build().sign(private_key)
             txn.broadcast()
-            
             incr_daily_count()
             await update.message.reply_text(f"✅ <b>预支TRX发放成功！</b>\n\n已向您的地址发送 <code>{FUEL_AMOUNT}</code> TRX。", parse_mode="HTML")
             
             # 繁體通知管理員
-            admin_notice = (
-                "⛽ <b>【發放通知】</b>\n\n"
-                f"👤 <b>用戶 ID：</b> <code>{user.id}</code>\n"
-                f"📥 <b>錢包地址：</b> <code>{text}</code>\n"
-                f"📊 <b>今日進度：</b> {get_daily_count()} / {DAILY_LIMIT}"
-            )
-            await context.bot.send_message(chat_id=ADMIN_ID, text=admin_notice, parse_mode="HTML")
-
+            admin_msg = f"⛽ <b>【發放成功】</b>\n地址：<code>{text}</code>\n今日進度：{get_daily_count()}/{DAILY_LIMIT}"
+            await context.bot.send_message(chat_id=ADMIN_ID, text=admin_msg, parse_mode="HTML")
         except Exception as e:
-            # 失敗則清除雲端紀錄，允許重試
-            remove_claim(text, user.id)
-            await update.message.reply_text(f"❌ <b>发放失败：{e}</b>", parse_mode="HTML")
+            if r: 
+                r.delete(f"lock:addr:{text}")
+                r.delete(f"lock:user:{user.id}")
+            await update.message.reply_text(f"❌ 发放失败: {e}", parse_mode="HTML")
 
 # =====================
-# 📋 管理員通知邏輯 (繁體中文)
+# 📋 掃描與自動出金 (管理端繁體)
 # =====================
 async def poll_trc20(app):
     try:
@@ -173,10 +158,8 @@ async def poll_trc20(app):
             val = float(tx["value"]) / 1_000_000
             from_addr = tx["from"]
             
-            is_repaying = False
-            if r and r.exists(f"claimed_addr:{from_addr}"):
-                is_repaying = True
-
+            # 判斷是否欠著預支
+            is_repaying = r.exists(f"lock:addr:{from_addr}") if r else False
             rate = FIXED_RATE_TRX * (1 - FEE_RATE)
             raw_trx = round(val * rate, 2)
             final_pay = round(raw_trx - (FUEL_AMOUNT if is_repaying else 0), 2)
@@ -185,22 +168,16 @@ async def poll_trc20(app):
                 try:
                     txn = tron.trx.transfer(HOT_WALLET_ADDRESS, from_addr, int(final_pay * 1_000_000)).build().sign(private_key)
                     txn.broadcast()
-                    if is_repaying: remove_claim(from_addr, "UNKNOWN")
-                    status = "✅ <b>自動出金成功</b>"
-                except Exception as e: status = f"❌ <b>失敗: {e}</b>"
-            else: status = "🟡 <b>待人工處理</b>"
+                    # 兌換成功後，自動從雲端刪除鎖定紀錄
+                    if r: r.delete(f"lock:addr:{from_addr}")
+                    status = "✅ 自動出金成功"
+                except Exception as e: status = f"❌ 失敗: {e}"
+            else: status = "🟡 待處理"
 
-            msg = (
-                f"🔔 <b>【USDT 入帳通知】</b>\n\n"
-                f"💰 金額: <code>{val}</code> USDT\n"
-                f"👤 來源: <code>{from_addr}</code>\n"
-                f"⛽ 扣除預支: {'🚩 是' if is_repaying else '否'}\n"
-                f"💸 實發金額: <b>{final_pay} TRX</b>\n"
-                f"📢 狀態: {status}"
-            )
+            msg = (f"🔔 <b>【USDT 入帳】</b>\n金額: {val} USDT\n來源: <code>{from_addr}</code>\n"
+                   f"扣除預支: {'是' if is_repaying else '否'}\n實發: {final_pay} TRX\n狀態: {status}")
             await app.bot.send_message(chat_id=ADMIN_ID, text=msg, parse_mode="HTML")
-    except Exception as e: 
-        print(f"Scan Error: {e}")
+    except Exception as e: print(f"Scan Error: {e}")
 
 # =====================
 # 🚀 啟動
@@ -211,18 +188,12 @@ async def main():
     app.add_handler(CommandHandler("usdt", usdt))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_address_message))
     
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
-    print("🤖 機器人已在 Redis 持久化模式下啟動")
+    await app.initialize(); await app.start(); await app.updater.start_polling()
+    print("🤖 機器人已在永久雲端鎖定模式下啟動")
     
-    try:
-        while True:
-            await poll_trc20(app)
-            await asyncio.sleep(POLL_INTERVAL)
-    finally:
-        await app.stop()
-        await app.shutdown()
+    while True: 
+        await poll_trc20(app)
+        await asyncio.sleep(POLL_INTERVAL)
 
 SEEN_TX = set(); START_TIME = time.time()
 if __name__ == "__main__":
