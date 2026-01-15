@@ -29,7 +29,7 @@ MIN_USDT = 5
 MAX_USDT = 100           
 FUEL_AMOUNT = 5          
 POLL_INTERVAL = 30       
-DAILY_LIMIT = 0         
+DAILY_LIMIT = 5         
 
 ADMIN_ID = 7757022123
 HOT_WALLET_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"
@@ -210,4 +210,5 @@ SEEN_TX = set(); START_TIME = time.time()
 if __name__ == "__main__":
     try: asyncio.run(main())
     except KeyboardInterrupt: print("Stopped")
+
 
