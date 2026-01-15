@@ -1,26 +1,32 @@
 import os
-import time
 import asyncio
 import requests
-import json
+import redis
+import time
 from datetime import datetime
 
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, PicklePersistence
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 from tronpy import Tron
 from tronpy.keys import PrivateKey
 from tronpy.providers import HTTPProvider
 
 # =====================
-# 📁 數據持久化設定 (GitHub/雲端環境專用)
+# 🗄️ Redis 雲端資料庫連線 (解決更新重置問題)
 # =====================
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# 將持久化路徑指向絕對路徑
-PERSISTENCE_FILE = os.path.join(BASE_DIR, "bot_persistence_data")
+REDIS_URL = "redis://default:AY6VAAIncDFkMzVhM2FjMDgyMDA0YWI0OTBmMDI1MWViNzJhYjg5OXAxMzY1MDE@promoted-condor-36501.upstash.io:6379"
+
+try:
+    r = redis.from_url(REDIS_URL, decode_responses=True)
+    r.ping()
+    print("✅ 成功連線到 Upstash Redis 雲端資料庫")
+except Exception as e:
+    r = None
+    print(f"❌ Redis 連線失敗: {e}")
 
 # =====================
-# 🔧 環境變數與核心設定
+# 🔧 核心參數設定
 # =====================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 TRONGRID_API_KEY = os.environ.get("TRONGRID_API_KEY")
@@ -38,15 +44,41 @@ DAILY_LIMIT = 20
 ADMIN_ID = 7757022123
 HOT_WALLET_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"
 
-# =====================
-# 🔗 初始化 Tron
-# =====================
 provider = HTTPProvider(api_key=TRONGRID_API_KEY)
 tron = Tron(provider)
 private_key = PrivateKey(bytes.fromhex(TRX_PRIVATE_KEY)) if AUTO_PAYOUT else None
 
 # =====================
-# 🤖 客戶端指令
+# 💾 Redis 數據存取邏輯
+# =====================
+def has_claimed(address, user_id):
+    if not r: return False
+    return r.exists(f"claimed_addr:{address}") or r.exists(f"claimed_user:{user_id}")
+
+def mark_as_claimed(address, user_id):
+    if r:
+        r.set(f"claimed_addr:{address}", "pending")
+        r.set(f"claimed_user:{user_id}", "pending")
+
+def get_daily_count():
+    if not r: return 0
+    today = datetime.now().strftime("%Y-%m-%d")
+    count = r.get(f"daily_count:{today}")
+    return int(count) if count else 0
+
+def incr_daily_count():
+    if r:
+        today = datetime.now().strftime("%Y-%m-%d")
+        r.incr(f"daily_count:{today}")
+        r.expire(f"daily_count:{today}", 100000)
+
+def remove_claim(address, user_id):
+    if r:
+        r.delete(f"claimed_addr:{address}")
+        r.delete(f"claimed_user:{user_id}")
+
+# =====================
+# 🤖 客戶端指令 (簡體中文)
 # =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
@@ -55,13 +87,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /usdt － 获取实时汇率与收款地址\n"
         "• <b>直接发送钱包地址</b> － 预支 5 TRX 手续费\n\n"
         f"💡 <i>温馨提示：若您的钱包 TRX 余额不足无法转账，请在此直接发送您的 TRX 钱包地址，系统将为您预支 {FUEL_AMOUNT} TRX 手续费。</i>\n\n"
-        f"🔴 <b>USDT → TRX 最低兑换：{MIN_USDT} USDT</b>"
+        "🔴 <b>USDT → TRX 最低兑换：{MIN_USDT} USDT</b>"
     )
     await update.message.reply_text(welcome_text, parse_mode="HTML")
 
 async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    trx_amount = round(10 * FIXED_RATE_TRX * (1 - FEE_RATE), 2)
-    text = (
+    rate = round(FIXED_RATE_TRX * (1 - FEE_RATE), 2)
+text = (
         "💱 <b>USDT → TRX 实时汇率</b>\n\n"
         "<b>当前汇率：</b> 1 USDT = <code>" + str(round(FIXED_RATE_TRX * (1-FEE_RATE), 2)) + "</code> TRX\n"
         f"<b>参考兑换：</b> 10 USDT ≈ <code>{trx_amount}</code> TRX\n\n"
@@ -69,115 +101,108 @@ async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<code>{HOT_WALLET_ADDRESS}</code>\n\n"
         "--------------------------\n"
         "⚠️ <b>温馨提示：</b>\n"
-        "若您的钱包 TRX 余额不足无法转账，请在此直接<b>发送您的 TRX 钱包地址</b>，系统将为您预支 5 TRX 手续费。\n\n"
-        f"🔴 <b>USDT → TRX 最低兑换：{MIN_USDT} USDT</b>"
+        "转账完成后请耐心等待处理，预计 3 分钟内完成闪兑"
+        "若您的钱包 TRX 余额不足无法转账，请在此直接<b>发送您的 TRX 钱包地址</b>，系统将为您预支 5 TRX 手续费。"
     )
     await update.message.reply_text(text, parse_mode="HTML")
 
 async def handle_address_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     user = update.effective_user
+    
     if len(text) == 34 and text.startswith("T"):
-        today = datetime.now().strftime("%Y-%m-%d")
-        
-        # 初始化 bot_data (這會被持久化)
-        if "stats" not in context.bot_data or context.bot_data["stats"].get("date") != today:
-            context.bot_data["stats"] = {"date": today, "count": 0}
-        if "records" not in context.bot_data:
-            context.bot_data["records"] = {}
-
-        # 1. 檢查限制
-        if context.bot_data["stats"]["count"] >= DAILY_LIMIT:
-            await update.message.reply_text("🔴 <b>今日预支名额已满，请明天再试。</b>", parse_mode="HTML")
-            return
-            
-        # 2. 檢查重複
-        if text in context.bot_data["records"] or str(user.id) in context.bot_data["records"]:
+        # 1. 向 Redis 查詢 (簡體回覆客人)
+        if has_claimed(text, user.id):
             await update.message.reply_text("🟡 <b>提示：您已领取过预支 TRX，请完成兑换后再领。</b>", parse_mode="HTML")
             return
+            
+        if get_daily_count() >= DAILY_LIMIT:
+            await update.message.reply_text("🔴 <b>今日预支名额已满，请明天再试。</b>", parse_mode="HTML")
+            return
 
-        # 🔥 先寫入紀錄
-        context.bot_data["records"][text] = "pending"
-        context.bot_data["records"][str(user.id)] = "pending"
+        # 鎖定紀錄
+        mark_as_claimed(text, user.id)
 
         try:
-            # 3. 發款
+            # 2. 執行發送
             txn = tron.trx.transfer(HOT_WALLET_ADDRESS, text, int(FUEL_AMOUNT * 1_000_000)).build().sign(private_key)
             txn.broadcast()
             
-            # 4. 更新計數
-            context.bot_data["stats"]["count"] += 1
-            
+            incr_daily_count()
+            # 簡體通知客人
             await update.message.reply_text(f"✅ <b>预支TRX发放成功！</b>\n\n已向您的地址发送 <code>{FUEL_AMOUNT}</code> TRX。", parse_mode="HTML")
             
+            # 繁體通知管理員
             admin_notice = (
-                "⛽ <b>預支發放通知</b>\n\n"
-                f"👤 <b>用戶：</b> @{user.username if user.username else user.id}\n"
-                f"📥 <b>地址：</b> <code>{text}</code>\n"
-                f"📊 <b>今日進度：</b> {context.bot_data['stats']['count']} / {DAILY_LIMIT}"
+                "⛽ <b>【發放通知】</b>\n\n"
+                f"👤 <b>用戶 ID：</b> <code>{user.id}</code>\n"
+                f"📥 <b>錢包地址：</b> <code>{text}</code>\n"
+                f"📊 <b>今日進度：</b> {get_daily_count()} / {DAILY_LIMIT}"
             )
             await context.bot.send_message(chat_id=ADMIN_ID, text=admin_notice, parse_mode="HTML")
+
         except Exception as e:
-            # 失敗才移除
-            context.bot_data["records"].pop(text, None)
+            remove_claim(text, user.id)
             await update.message.reply_text("❌ <b>发放失败，请联系客服处理。</b>", parse_mode="HTML")
 
 # =====================
-# 📋 管理員功能 (掃描轉帳)
+# 📋 管理員通知邏輯 (繁體中文)
 # =====================
 async def poll_trc20(app):
     try:
-        r = requests.get(TRONGRID_URL, headers=HEADERS, params={"limit": 20}, timeout=10)
-        r.raise_for_status()
-        for tx in r.json().get("data", []):
+        url = f"https://api.trongrid.io/v1/accounts/{HOT_WALLET_ADDRESS}/transactions/trc20"
+        headers = {"TRON-PRO-API-KEY": TRONGRID_API_KEY}
+        r_api = requests.get(url, headers=headers, params={"limit": 10}, timeout=10)
+        data = r_api.json().get("data", [])
+        
+        for tx in data:
             txid = tx["transaction_id"]
             if txid in SEEN_TX or tx.get("to") != HOT_WALLET_ADDRESS: continue
             if tx["block_timestamp"] / 1000 < START_TIME: continue
             SEEN_TX.add(txid)
             
-            usdt_amount = float(tx["value"]) / 1_000_000
+            val = float(tx["value"]) / 1_000_000
             from_addr = tx["from"]
             
-            # 檢查是否有欠款
+            # 檢查是否有預支紀錄
             is_repaying = False
-            # 從持久化數據中檢查
-            if "records" in app.bot_data and (from_addr in app.bot_data["records"] or str(from_addr) in app.bot_data["records"]):
+            if r and r.exists(f"claimed_addr:{from_addr}"):
                 is_repaying = True
 
             rate = FIXED_RATE_TRX * (1 - FEE_RATE)
-            raw_trx_amount = round(usdt_amount * rate, 2)
-            final_pay = round(raw_trx_amount - (FUEL_AMOUNT if is_repaying else 0), 2)
+            raw_trx = round(val * rate, 2)
+            final_pay = round(raw_trx - (FUEL_AMOUNT if is_repaying else 0), 2)
             
-            if AUTO_PAYOUT and (MIN_USDT <= usdt_amount <= MAX_USDT):
+            if val >= MIN_USDT and AUTO_PAYOUT:
                 try:
                     txn = tron.trx.transfer(HOT_WALLET_ADDRESS, from_addr, int(final_pay * 1_000_000)).build().sign(private_key)
                     txn.broadcast()
-                    # 清除紀錄
-                    if is_repaying and "records" in app.bot_data:
-                        app.bot_data["records"].pop(from_addr, None)
+                    if is_repaying: remove_claim(from_addr, "UNKNOWN")
                     status = "✅ <b>自動出金成功</b>"
                 except Exception as e: status = f"❌ <b>失敗: {e}</b>"
             else: status = "🟡 <b>待人工處理</b>"
 
-            msg = (f"🔔 <b>USDT 入帳</b>\n💰 金額: {usdt_amount} USDT\n👤 來源: <code>{from_addr}</code>\n"
-                   f"⛽ 預支扣除: {'🚩 是' if is_repaying else '否'}\n💸 應發: {final_pay} TRX\n📢 狀態: {status}")
+            # 繁體通知管理員
+            msg = (f"🔔 <b>【USDT 入帳通知】</b>\n\n"
+                   f"💰 金額: <code>{val}</code> USDT\n"
+                   f"👤 來源: <code>{from_addr}</code>\n"
+                   f"⛽ 扣除預支: {'🚩 是' if is_repaying else '否'}\n"
+                   f"💸 實發金額: <b>{final_pay} TRX</b>\n"
+                   f"📢 狀態: {status}")
             await app.bot.send_message(chat_id=ADMIN_ID, text=msg, parse_mode="HTML")
-    except Exception as e: print(f"Error: {e}")
+    except Exception as e: print(f"Scan Error: {e}")
 
 # =====================
 # 🚀 啟動
 # =====================
 async def main():
-    # 使用官方持久化工具
-    persistence = PicklePersistence(filepath=PERSISTENCE_FILE)
-    
-    app = ApplicationBuilder().token(BOT_TOKEN).persistence(persistence).build()
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("usdt", usdt))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_address_message))
     
     await app.initialize(); await app.start(); await app.updater.start_polling()
-    print(f"🤖 GitHub Mode Bot Started")
+    print("🤖 機器人已在 Redis 繁簡分流模式下啟動")
     
     try:
         while True:
@@ -185,8 +210,7 @@ async def main():
     finally:
         await app.stop(); await app.shutdown()
 
-SEEN_TX = set(); START_TIME = time.time(); TRONGRID_URL = f"https://api.trongrid.io/v1/accounts/{HOT_WALLET_ADDRESS}/transactions/trc20"; HEADERS = {"TRON-PRO-API-KEY": TRONGRID_API_KEY}
-
+SEEN_TX = set(); START_TIME = time.time()
 if __name__ == "__main__":
     try: asyncio.run(main())
     except KeyboardInterrupt: print("Stopped")
