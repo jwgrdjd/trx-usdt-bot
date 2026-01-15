@@ -13,15 +13,13 @@ from tronpy.keys import PrivateKey
 from tronpy.providers import HTTPProvider
 
 # =====================
-# 🔧 環境變數與設定
+# 🔧 环境变量与核心设置
 # =====================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 TRONGRID_API_KEY = os.environ.get("TRONGRID_API_KEY")
 TRX_PRIVATE_KEY = os.environ.get("TRX_PRIVATE_KEY")
 
-if not BOT_TOKEN or not TRONGRID_API_KEY:
-    raise RuntimeError("❌ 缺少必要的環境變數 BOT_TOKEN 或 TRONGRID_API_KEY")
-
+# 业务参数
 AUTO_PAYOUT = True       
 FIXED_RATE_TRX = 3.2     
 FEE_RATE = 0.05          
@@ -29,7 +27,7 @@ MIN_USDT = 5
 MAX_USDT = 100           
 FUEL_AMOUNT = 5          
 POLL_INTERVAL = 30       
-DAILY_LIMIT = 5         
+DAILY_LIMIT = 20         # 随时可手动修改此数字
 
 ADMIN_ID = 7757022123
 HOT_WALLET_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"
@@ -37,14 +35,14 @@ FUEL_DB = "fuel_status.json"
 STATS_DB = "daily_stats.json" 
 
 # =====================
-# 🔗 Tron 初始化
+# 🔗 初始化 Tron
 # =====================
 provider = HTTPProvider(api_key=TRONGRID_API_KEY)
 tron = Tron(provider)
 private_key = PrivateKey(bytes.fromhex(TRX_PRIVATE_KEY)) if AUTO_PAYOUT else None
 
 # =====================
-# 📊 數據管理
+# 💾 数据库管理
 # =====================
 def check_daily_limit():
     today = datetime.now().strftime("%Y-%m-%d")
@@ -90,7 +88,7 @@ def update_fuel_status(address, user_id, status):
     with open(FUEL_DB, "w") as f: json.dump(data, f)
 
 # =====================
-# 🤖 客戶端指令 (簡體中文 + 顏色標記)
+# 🤖 客户端指令 (简体中文)
 # =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
@@ -98,7 +96,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔵 <b>快速操作：</b>\n"
         "• /usdt － 获取实时汇率与收款地址\n"
         "• <b>直接发送钱包地址</b> － 预支 5 TRX 手续费\n\n"
-        f"💡 <i>温馨提示：若钱包余额不足无法转账，直接貼上地址可预支 {FUEL_AMOUNT} TRX 手续费。</i>\n\n"
+        f"💡 <i>温馨提示：若您的钱包 TRX 余额不足无法转账，请在此直接发送您的 TRX 钱包地址，系统将为您预支 {FUEL_AMOUNT} TRX 手续费。</i>\n\n"
         f"🔴 <b>USDT → TRX 最低兑换：{MIN_USDT} USDT</b>"
     )
     await update.message.reply_text(welcome_text, parse_mode="HTML")
@@ -112,8 +110,8 @@ async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📥 <b>TRC20 收款地址 (点击可复制)</b>\n"
         f"<code>{HOT_WALLET_ADDRESS}</code>\n\n"
         "--------------------------\n"
-        "⚠️ <b>注意事项：</b>\n"
-        "若您的錢包 TRX 餘額不足無法轉帳，請在此直接<b>發送您的 TRX 錢包地址</b>，系統將為您預支 5 TRX 手續費。\n\n"
+        "⚠️ <b>温馨提示：</b>\n"
+        "若您的钱包 TRX 余额不足无法转账，请在此直接<b>发送您的 TRX 钱包地址</b>，系统将为您预支 5 TRX 手续费。\n\n"
         f"🔴 <b>USDT → TRX 最低兑换：{MIN_USDT} USDT</b>"
     )
     await update.message.reply_text(text, parse_mode="HTML")
@@ -127,7 +125,7 @@ async def handle_address_message(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("🔴 <b>今日预支名额已满，请明天再试。</b>", parse_mode="HTML")
             return
         if get_fuel_status(text, user_id) == "pending":
-            await update.message.reply_text("🟡 <b>提示：您已領取過預支 TRX，請完成兌換後再領。</b>", parse_mode="HTML")
+            await update.message.reply_text("🟡 <b>提示：您已领取过预支 TRX，请完成兑换后再领。</b>", parse_mode="HTML")
             return
         try:
             txn = tron.trx.transfer(HOT_WALLET_ADDRESS, text, int(FUEL_AMOUNT * 1_000_000)).build().sign(private_key)
@@ -139,7 +137,7 @@ async def handle_address_message(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("❌ <b>发放失败，请联系客服处理。</b>", parse_mode="HTML")
 
 # =====================
-# 📋 管理員通知 (繁體中文 + 顏色狀態)
+# 📋 管理员功能 (繁体中文)
 # =====================
 async def pending_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
@@ -189,7 +187,7 @@ async def poll_trc20(app):
     except Exception as e: print(f"Error: {e}")
 
 # =====================
-# 🚀 啟動邏輯
+# 🚀 启动
 # =====================
 async def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -206,9 +204,8 @@ async def main():
         if app.updater.running: await app.updater.stop()
         await app.stop(); await app.shutdown()
 
-SEEN_TX = set(); START_TIME = time.time()
+SEEN_TX = set(); START_TIME = time.time(); TRONGRID_URL = f"https://api.trongrid.io/v1/accounts/{HOT_WALLET_ADDRESS}/transactions/trc20"; HEADERS = {"TRON-PRO-API-KEY": TRONGRID_API_KEY}
+
 if __name__ == "__main__":
     try: asyncio.run(main())
     except KeyboardInterrupt: print("Stopped")
-
-
