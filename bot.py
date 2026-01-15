@@ -13,13 +13,20 @@ from tronpy.keys import PrivateKey
 from tronpy.providers import HTTPProvider
 
 # =====================
+# 📁 數據持久化路徑 (絕對路徑鎖定)
+# =====================
+# 確保無論從哪裡啟動，都會讀取腳本所在資料夾的資料庫
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+FUEL_DB = os.path.join(BASE_DIR, "fuel_status.json")
+STATS_DB = os.path.join(BASE_DIR, "daily_stats.json")
+
+# =====================
 # 🔧 環境變數與核心設定
 # =====================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 TRONGRID_API_KEY = os.environ.get("TRONGRID_API_KEY")
 TRX_PRIVATE_KEY = os.environ.get("TRX_PRIVATE_KEY")
 
-# 業務參數
 AUTO_PAYOUT = True       
 FIXED_RATE_TRX = 3.2     
 FEE_RATE = 0.05          
@@ -31,8 +38,6 @@ DAILY_LIMIT = 20
 
 ADMIN_ID = 7757022123
 HOT_WALLET_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"
-FUEL_DB = "fuel_status.json"
-STATS_DB = "daily_stats.json" 
 
 # =====================
 # 🔗 初始化 Tron
@@ -42,7 +47,7 @@ tron = Tron(provider)
 private_key = PrivateKey(bytes.fromhex(TRX_PRIVATE_KEY)) if AUTO_PAYOUT else None
 
 # =====================
-# 💾 數據存儲邏輯
+# 💾 數據庫管理函數
 # =====================
 def check_daily_limit():
     today = datetime.now().strftime("%Y-%m-%d")
@@ -71,6 +76,7 @@ def get_fuel_status(address, user_id):
     with open(FUEL_DB, "r") as f:
         try:
             data = json.load(f)
+            # 同時檢查地址與 ID 紀錄
             if data.get(address) == "pending" or data.get(str(user_id)) == "pending": return "pending"
             return None
         except: return None
@@ -128,31 +134,30 @@ async def handle_address_message(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("🟡 <b>提示：您已领取过预支 TRX，请完成兑换后再领。</b>", parse_mode="HTML")
             return
         try:
-            # 執行轉帳
+            # 發送 5 TRX
             txn = tron.trx.transfer(HOT_WALLET_ADDRESS, text, int(FUEL_AMOUNT * 1_000_000)).build().sign(private_key)
             txn.broadcast()
             
-            # 更新數據庫
+            # 更新數據庫 (絕對路徑操作)
             update_fuel_status(text, user.id, "pending")
             increment_daily_count()
             
-            # 1. 回覆用戶 (簡體)
+            # 回覆用戶
             await update.message.reply_text(f"✅ <b>预支TRX发放成功！</b>\n\n已向您的地址发送 <code>{FUEL_AMOUNT}</code> TRX。该款项将在您兑换成功时自动扣回。", parse_mode="HTML")
             
-            # 2. ✨ 通知管理員 (繁體)
+            # 通知管理員
             admin_notice = (
                 "⛽ <b>預支發放通知</b>\n\n"
                 f"👤 <b>用戶 ID：</b> <code>{user.id}</code>\n"
                 f"👤 <b>用戶名：</b> @{user.username if user.username else '無'}\n"
                 f"📥 <b>錢包地址：</b> <code>{text}</code>\n"
-                f"💰 <b>金額：</b> {FUEL_AMOUNT} TRX\n"
                 f"📊 <b>今日進度：</b> {current_count + 1} / {DAILY_LIMIT}"
             )
             await context.bot.send_message(chat_id=ADMIN_ID, text=admin_notice, parse_mode="HTML")
 
         except Exception as e:
             await update.message.reply_text("❌ <b>发放失败，请联系客服处理。</b>", parse_mode="HTML")
-            await context.bot.send_message(chat_id=ADMIN_ID, text=f"❌ <b>預支發放錯誤：</b>\n{str(e)}")
+            await context.bot.send_message(chat_id=ADMIN_ID, text=f"❌ <b>預支發放錯誤通知：</b>\n{str(e)}")
 
 # =====================
 # 📋 管理員功能 (繁體中文)
@@ -202,10 +207,10 @@ async def poll_trc20(app):
                    f"💸 <b>應發總計：</b> <u>{final_pay} TRX</u>\n\n"
                    f"📢 <b>狀態：</b> {status_display}")
             await app.bot.send_message(chat_id=ADMIN_ID, text=msg, parse_mode="HTML")
-    except Exception as e: print(f"Scan Error: {e}")
+    except Exception as e: print(f"Error: {e}")
 
 # =====================
-# 🚀 啟動邏輯
+# 🚀 執行
 # =====================
 async def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -213,8 +218,10 @@ async def main():
     app.add_handler(CommandHandler("usdt", usdt))
     app.add_handler(CommandHandler("pending", pending_list))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_address_message))
+    
     await app.initialize(); await app.start(); await app.updater.start_polling()
-    print(f"🤖 Bot Started | Daily Limit: {DAILY_LIMIT}")
+    print(f"🤖 Bot 已啟動 | 資料夾: {BASE_DIR}")
+    
     try:
         while True:
             await poll_trc20(app); await asyncio.sleep(POLL_INTERVAL)
