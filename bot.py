@@ -35,6 +35,7 @@ FEE_RATE = 0.05
 MIN_USDT = 5
 MAX_USDT = 100
 FUEL_AMOUNT = 5          
+POLL_INTERVAL = 30  # ✨ 補上漏掉的監聽間隔 (秒)
 
 ADMIN_ID = 7757022123
 HOT_WALLET_ADDRESS = "TTCHVb7hfcLRcE452ytBQN5PL5TXMnWEKo"
@@ -58,12 +59,19 @@ if AUTO_PAYOUT:
 def get_fuel_status(address):
     if not os.path.exists(FUEL_DB): return None
     with open(FUEL_DB, "r") as f:
-        return json.load(f).get(address)
+        try:
+            return json.load(f).get(address)
+        except:
+            return None
 
 def update_fuel_status(address, status):
     data = {}
     if os.path.exists(FUEL_DB):
-        with open(FUEL_DB, "r") as f: data = json.load(f)
+        with open(FUEL_DB, "r") as f:
+            try:
+                data = json.load(f)
+            except:
+                data = {}
     if status is None: data.pop(address, None)
     else: data[address] = status
     with open(FUEL_DB, "w") as f: json.dump(data, f)
@@ -91,7 +99,7 @@ async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📥 <b>TRC20 USDT 换 TRX 地址（点击可复制）</b>\n"
         f"<code>{HOT_WALLET_ADDRESS}</code>\n\n"
         "⚠️ 请务必使用 TRC20 网络转账\n"
-        "转账完成后请耐心等待处理，预计 3 分钟内完成闪兑"
+        "转账完成后请耐心等待处理，预计 3 分鐘內完成閃兌"
     )
     await update.message.reply_text(text, parse_mode="HTML")
 
@@ -116,7 +124,11 @@ async def pending_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not os.path.exists(FUEL_DB):
         await update.message.reply_text("目前没有借款纪录。")
         return
-    with open(FUEL_DB, "r") as f: data = json.load(f)
+    with open(FUEL_DB, "r") as f:
+        try:
+            data = json.load(f)
+        except:
+            data = {}
     pending_addrs = [addr for addr, status in data.items() if status == "pending"]
     if not pending_addrs:
         await update.message.reply_text("✅ 目前没有未归还的借款。")
@@ -133,6 +145,10 @@ SEEN_TX = set()
 START_TIME = time.time()
 TRONGRID_URL = f"https://api.trongrid.io/v1/accounts/{HOT_WALLET_ADDRESS}/transactions/trc20"
 HEADERS = {"TRON-PRO-API-KEY": TRONGRID_API_KEY}
+
+def in_auto_time():
+    h = datetime.now().hour
+    return AUTO_START_HOUR <= h < AUTO_END_HOUR
 
 async def poll_trc20(app):
     try:
@@ -154,8 +170,9 @@ async def poll_trc20(app):
             loan_text = f"有 (需扣除 {FUEL_AMOUNT} TRX)" if is_repaying else "无"
             final_pay = round(raw_trx_amount - (FUEL_AMOUNT if is_repaying else 0), 2)
 
-            auto_ok = AUTO_PAYOUT and (MIN_USDT <= usdt_amount <= MAX_USDT)
-            
+            auto_ok = AUTO_PAYOUT and (not NIGHT_AUTO_ONLY or in_auto_time())
+            if usdt_amount < MIN_USDT or usdt_amount > MAX_USDT: auto_ok = False
+
             status_display = "🟡 待人工處理"
             if auto_ok:
                 try:
@@ -202,6 +219,9 @@ async def main():
             await poll_trc20(app)
             await asyncio.sleep(POLL_INTERVAL)
     finally:
+        # 修正關閉邏輯
+        if app.updater.running:
+            await app.updater.stop()
         await app.stop()
         await app.shutdown()
 
