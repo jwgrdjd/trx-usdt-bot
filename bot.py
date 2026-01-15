@@ -13,14 +13,14 @@ from tronpy.keys import PrivateKey
 from tronpy.providers import HTTPProvider
 
 # =====================
-# 🗄️ Redis 雲端資料庫連線 (永久鎖定紀錄)
+# 🗄️ Redis 雲端資料庫連線
 # =====================
 REDIS_URL = "redis://default:AY6VAAIncDFkMzVhM2FjMDgyMDA0YWI0OTBmMDI1MWViNzJhYjg5OXAxMzY1MDE@promoted-condor-36501.upstash.io:6379"
 
 try:
     r = redis.from_url(REDIS_URL, decode_responses=True, socket_timeout=5)
     r.ping()
-    print("✅ Upstash Redis 連線成功，已開啟永久鎖定模式 (預支 4 TRX)")
+    print("✅ Upstash Redis 連線成功 (支援用戶名追蹤)")
 except Exception as e:
     r = None
     print(f"❌ Redis 連線失敗: {e}")
@@ -37,7 +37,7 @@ FIXED_RATE_TRX = 3.2
 FEE_RATE = 0.05          
 MIN_USDT = 5             
 MAX_USDT = 100           
-FUEL_AMOUNT = 4          # 已修改為 4 TRX
+FUEL_AMOUNT = 4          
 POLL_INTERVAL = 30       
 DAILY_LIMIT = 20         
 
@@ -49,19 +49,19 @@ tron = Tron(provider)
 private_key = PrivateKey(bytes.fromhex(TRX_PRIVATE_KEY)) if TRX_PRIVATE_KEY else None
 
 # =====================
-# 💾 數據存取邏輯 (永久存儲)
+# 💾 數據存取邏輯
 # =====================
 def has_claimed(address, user_id):
-    if not r: 
-        print("🚨 資料庫未連線，為防止刷錢，暫停預支發放")
-        return True 
+    if not r: return True
     return r.exists(f"lock:addr:{address}") or r.exists(f"lock:user:{user_id}")
 
-def mark_as_claimed(address, user_id):
+def mark_as_claimed(address, user_id, username):
     if r:
+        # 永久鎖定
         r.set(f"lock:addr:{address}", "claimed")
         r.set(f"lock:user:{user_id}", "claimed")
-        print(f"🔒 已永久鎖定領取紀錄：{address}")
+        # 額外存儲地址與用戶名的對應關係，方便後續追蹤
+        r.set(f"who:{address}", username)
 
 def get_daily_count():
     if not r: return 0
@@ -76,7 +76,7 @@ def incr_daily_count():
         r.expire(f"daily:count:{today}", 86400)
 
 # =====================
-# 🤖 客戶端指令 (繁簡分流：客戶端簡體)
+# 🤖 客戶端指令 (簡體)
 # =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
@@ -108,6 +108,7 @@ async def usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_address_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     user = update.effective_user
+    username = f"@{user.username}" if user.username else f"{user.first_name}"
     
     if len(text) == 34 and text.startswith("T"):
         if has_claimed(text, user.id):
@@ -118,25 +119,30 @@ async def handle_address_message(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("🔴 <b>今日预支名额已满，请明天再试。</b>", parse_mode="HTML")
             return
 
-        mark_as_claimed(text, user.id)
+        mark_as_claimed(text, user.id, username)
 
         try:
-            # 發放金額已改為 4 TRX
             txn = tron.trx.transfer(HOT_WALLET_ADDRESS, text, int(FUEL_AMOUNT * 1_000_000)).build().sign(private_key)
             txn.broadcast()
             incr_daily_count()
             await update.message.reply_text(f"✅ <b>预支TRX发放成功！</b>\n\n已向您的地址发送 <code>{FUEL_AMOUNT}</code> TRX。", parse_mode="HTML")
             
-            admin_msg = f"⛽ <b>【發放成功 (4 TRX)】</b>\n地址：<code>{text}</code>\n今日進度：{get_daily_count()}/{DAILY_LIMIT}"
+            # 管理員通知 (繁體)
+            admin_msg = (
+                f"⛽ <b>【發放成功 (4 TRX)】</b>\n"
+                f"👤 用戶：{user.first_name} ({username})\n"
+                f"🆔 ID：<code>{user.id}</code>\n"
+                f"📥 地址：<code>{text}</code>\n"
+                f"📊 今日進度：{get_daily_count()}/{DAILY_LIMIT}"
+            )
             await context.bot.send_message(chat_id=ADMIN_ID, text=admin_msg, parse_mode="HTML")
         except Exception as e:
             if r: 
-                r.delete(f"lock:addr:{text}")
-                r.delete(f"lock:user:{user.id}")
+                r.delete(f"lock:addr:{text}"); r.delete(f"lock:user:{user.id}"); r.delete(f"who:{text}")
             await update.message.reply_text(f"❌ 发放失败: {e}", parse_mode="HTML")
 
 # =====================
-# 📋 掃描與自動出金 (管理端繁體)
+# 📋 掃描與出金 (管理端繁體)
 # =====================
 async def poll_trc20(app):
     try:
@@ -154,23 +160,30 @@ async def poll_trc20(app):
             val = float(tx["value"]) / 1_000_000
             from_addr = tx["from"]
             
-            is_repaying = r.exists(f"lock:addr:{from_addr}") if r else False
+            # 獲取領取過預支的用戶名
+            who_claimed = r.get(f"who:{from_addr}") if r else None
+            is_repaying = True if who_claimed else False
+
             rate = FIXED_RATE_TRX * (1 - FEE_RATE)
             raw_trx = round(val * rate, 2)
-            # 這裡會根據 FUEL_AMOUNT (4) 自動扣除
             final_pay = round(raw_trx - (FUEL_AMOUNT if is_repaying else 0), 2)
             
             if val >= MIN_USDT and AUTO_PAYOUT:
                 try:
                     txn = tron.trx.transfer(HOT_WALLET_ADDRESS, from_addr, int(final_pay * 1_000_000)).build().sign(private_key)
                     txn.broadcast()
-                    if r: r.delete(f"lock:addr:{from_addr}")
+                    if r: r.delete(f"lock:addr:{from_addr}"); r.delete(f"who:{from_addr}")
                     status = "✅ 自動出金成功"
                 except Exception as e: status = f"❌ 失敗: {e}"
             else: status = "🟡 待處理"
 
-            msg = (f"🔔 <b>【USDT 入帳】</b>\n金額: {val} USDT\n來源: <code>{from_addr}</code>\n"
-                   f"扣除預支: {'是 (4 TRX)' if is_repaying else '否'}\n實發: {final_pay} TRX\n狀態: {status}")
+            msg = (f"🔔 <b>【USDT 入帳通知】</b>\n"
+                   f"💰 金額: {val} USDT\n"
+                   f"👤 來源: <code>{from_addr}</code>\n"
+                   f"👤 用戶: <b>{who_claimed if who_claimed else '未知/新客戶'}</b>\n"
+                   f"⛽ 扣除預支: {'是 (4 TRX)' if is_repaying else '否'}\n"
+                   f"💸 實發: {final_pay} TRX\n"
+                   f"📢 狀態: {status}")
             await app.bot.send_message(chat_id=ADMIN_ID, text=msg, parse_mode="HTML")
     except Exception as e: print(f"Scan Error: {e}")
 
@@ -182,16 +195,11 @@ async def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("usdt", usdt))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_address_message))
-    
     await app.initialize(); await app.start(); await app.updater.start_polling()
-    print("🤖 機器人已在 4 TRX 永久鎖定模式下啟動")
-    
-    while True: 
-        await poll_trc20(app)
-        await asyncio.sleep(POLL_INTERVAL)
+    print("🤖 機器人運行中 (含用戶名追蹤)")
+    while True: await poll_trc20(app); await asyncio.sleep(POLL_INTERVAL)
 
 SEEN_TX = set(); START_TIME = time.time()
 if __name__ == "__main__":
     try: asyncio.run(main())
     except KeyboardInterrupt: print("Stopped")
-
